@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Category, Product, Restaurant, Purchase, PurchaseItem
+from .models import Category, Product, Restaurant, Purchase, PurchaseItem, PurchaseList, PurchaseListItem, Unit
 from .services.serials import next_serial_for
 from django.utils import timezone
 
@@ -21,6 +21,40 @@ class PurchaseSerializer(serializers.ModelSerializer):
         model = Purchase
         fields = ['id','restaurant','serial','issue_date','notes','total_amount','items']
         read_only_fields = ['serial','issue_date','total_amount']
+
+class UnitSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Unit
+        fields = "__all__"
+
+class PurchaseListItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseListItem
+        fields = "__all__"
+
+    def validate(self, attrs):
+        unit = attrs.get("unit")
+        qty = attrs.get("qty")
+        price = attrs.get("price_soles")
+
+        if unit and unit.is_currency:
+            # Moneda: qty = importe, no debe venir price
+            if price not in (None, 0, 0.0):
+                raise serializers.ValidationError("Para unidad monetaria, no envíes price_soles (usa qty como importe).")
+        else:
+            # No moneda: price obligatorio
+            if price is None:
+                raise serializers.ValidationError("price_soles es obligatorio cuando la unidad no es monetaria.")
+        if qty is None or qty <= 0:
+            raise serializers.ValidationError("qty debe ser mayor que 0.")
+        return attrs
+
+class PurchaseListSerializer(serializers.ModelSerializer):
+    items = PurchaseListItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PurchaseList
+        fields = "__all__"
 
 def create(self, validated_data):
     items = validated_data.pop('items', [])
