@@ -14,5 +14,6 @@ router.register('purchases', PurchaseViewSet, basename='purchase')
 router.register('purchase-lists', PurchaseListViewSet, basename='purchase-list')
 
 urlpatterns = router.urls + [
+    path('public/config',  PublicConfigView.as_view(), name='public-config-no-slash'),
     path('public/config/', PublicConfigView.as_view(), name='public-config'),
 ]
