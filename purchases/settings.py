@@ -1,4 +1,8 @@
-import os, dj_database_url
+import os
+try:
+    import dj_database_url
+except ImportError:
+    dj_database_url = None
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,12 +21,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "insecure-dev")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL and dj_database_url:
+    DATABASES = {'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)}
 
 if DATABASE_URL:
     DATABASES = {"default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)}
 
-ALLOWED_HOSTS = [["localhost", "127.0.0.1"]]
+ALLOWED_HOSTS = []
 
 
 # Application definition
