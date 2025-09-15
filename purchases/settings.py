@@ -28,8 +28,7 @@ if DATABASE_URL and dj_database_url:
 if DATABASE_URL:
     DATABASES = {"default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)}
 
-ALLOWED_HOSTS = []
-
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost").split(",")
 
 # Application definition
 
