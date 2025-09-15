@@ -5,3 +5,5 @@ python-dotenv
 reportlab
 dj-database-url
 django-cors-headers
+gunicorn
+whitenoise
