@@ -2,7 +2,7 @@
 from django.utils import timezone
 
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action, authentication_classes, permission_classes
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,21 +17,13 @@ from .serializers import (
 from .services import generate_series_code
 
 
-# ---------------------------
-# Utilidad de permisos por defecto (admin)
-# ---------------------------
 class DefaultPerm(permissions.IsAuthenticated):
+    """Permiso por defecto para panel/admin."""
     pass
 
 
-# ---------------------------
-# PUBLIC CONFIG (sin login)
-# ---------------------------
+# --------- Público: config mínima ----------
 class PublicConfigView(APIView):
-    """
-    Devuelve configuración mínima para el builder público:
-    - restaurantes, categorías, productos, unidades
-    """
     permission_classes = [permissions.AllowAny]
     authentication_classes = []
 
@@ -49,9 +41,7 @@ class PublicConfigView(APIView):
         })
 
 
-# ---------------------------
-# Catálogo / Admin
-# ---------------------------
+# --------- Catálogo / Admin ----------
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
@@ -71,15 +61,12 @@ class RestaurantViewSet(viewsets.ModelViewSet):
 
 
 class UnitViewSet(viewsets.ModelViewSet):
-    """CRUD de unidades (admin)."""
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
     permission_classes = [DefaultPerm]
 
 
-# ---------------------------
-# Compras formales (futuro)
-# ---------------------------
+# --------- Compras formales (futuro) ----------
 class PurchaseViewSet(viewsets.ModelViewSet):
     queryset = Purchase.objects.prefetch_related('items').all()
     serializer_class = PurchaseSerializer
@@ -87,39 +74,31 @@ class PurchaseViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def pdf(self, request, pk=None):
-        # stub para PDF — Sprint siguiente
         return Response({'detail': 'PDF no implementado aún'}, status=200)
 
 
-# ---------------------------
-# LISTAS DE COMPRA (flujo público)
-# ---------------------------
+# --------- Listas (flujo público) ----------
 class PurchaseListViewSet(viewsets.ModelViewSet):
     """
-    - create  (POST /purchase-lists/)         -> público temporal
-    - items   (POST /purchase-lists/{id}/items/) -> público temporal
-    - finalize(POST /purchase-lists/{id}/finalize/) -> público temporal
-    El resto de acciones quedan protegidas por defecto.
+    Público temporal: create, add_item, finalize
     """
     queryset = PurchaseList.objects.prefetch_related('items', 'restaurant').all()
     serializer_class = PurchaseListSerializer
-    permission_classes = [permissions.IsAuthenticated]  # protegido por defecto
+    # Protegido por defecto; abrimos solo acciones públicas:
+    permission_classes = [permissions.IsAuthenticated]
 
-    # Público temporal para V1 (builder sin login):
     def get_permissions(self):
         if self.action in ['create', 'add_item', 'finalize']:
             return [permissions.AllowAny()]
         return super().get_permissions()
 
-    # Hacemos create explícitamente sin autenticación/CSRF
-    @authentication_classes([])
-    @permission_classes([permissions.AllowAny])
-    def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+    # Aseguramos que create no use SessionAuth/CSRF
+    authentication_classes = []  # aplica a create/update por defecto
 
-    @authentication_classes([])
-    @permission_classes([permissions.AllowAny])
-    @action(detail=True, methods=['post'], url_path='finalize')
+    @action(
+        detail=True, methods=['post'], url_path='finalize',
+        permission_classes=[permissions.AllowAny], authentication_classes=[]
+    )
     def finalize(self, request, pk=None):
         pl = self.get_object()
         if pl.status == "final":
@@ -127,18 +106,18 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 {"detail": "La lista ya está finalizada."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        else:
+            if not pl.series_code:
+                pl.series_code = generate_series_code(pl.restaurant.code, PurchaseList)
+            pl.status = "final"
+            pl.finalized_at = timezone.now()
+            pl.save()
+            return Response(PurchaseListSerializer(pl).data, status=200)
 
-        if not pl.series_code:
-            pl.series_code = generate_series_code(pl.restaurant.code, PurchaseList)
-
-        pl.status = "final"
-        pl.finalized_at = timezone.now()
-        pl.save()
-        return Response(PurchaseListSerializer(pl).data, status=200)
-
-    @authentication_classes([])
-    @permission_classes([permissions.AllowAny])
-    @action(detail=True, methods=['post'], url_path='items')
+    @action(
+        detail=True, methods=['post'], url_path='items',
+        permission_classes=[permissions.AllowAny], authentication_classes=[]
+    )
     def add_item(self, request, pk=None):
         """Agregar ítem a la lista (builder público)."""
         pl = self.get_object()
@@ -147,11 +126,11 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 {"detail": "No se pueden editar listas finalizadas."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        data = request.data.copy()
-        data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data)
-        if ser.is_valid():
-            ser.save()
-            return Response(ser.data, status=201)
-        return Response(ser.errors, status=400)
+        else:
+            data = request.data.copy()
+            data['purchase_list'] = pl.id
+            ser = PurchaseListItemSerializer(data=data)
+            if ser.is_valid():
+                ser.save()
+                return Response(ser.data, status=201)
+            return Response(ser.errors, status=400)
