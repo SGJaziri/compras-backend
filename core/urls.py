@@ -1,7 +1,5 @@
-from django.urls import path     
+from django.urls import path
 from rest_framework.routers import DefaultRouter
-from .views import CategoryViewSet, ProductViewSet, RestaurantViewSet, PurchaseViewSet
-
 from .views import (
     CategoryViewSet, ProductViewSet, RestaurantViewSet, UnitViewSet,
     PurchaseViewSet, PurchaseListViewSet, PublicConfigView
