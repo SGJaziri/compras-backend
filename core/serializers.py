@@ -1,74 +1,132 @@
+# core/serializers.py
+from decimal import Decimal
 from rest_framework import serializers
-from .models import Category, Product, Restaurant, Purchase, PurchaseItem, PurchaseList, PurchaseListItem, Unit
-from .services import next_serial_for
-from django.utils import timezone
+from .models import (
+    Unit, Category, Product, Restaurant,
+    Purchase, PurchaseItem, PurchaseList, PurchaseListItem
+)
 
-class CategorySerializer(serializers.ModelSerializer):
-    class Meta: model = Category; fields = ['id', 'name']
-
-class RestaurantSerializer(serializers.ModelSerializer):
-    class Meta: model = Restaurant; fields = ['id', 'name', 'code']
-
-class ProductSerializer(serializers.ModelSerializer):
-    class Meta: model = Product; fields = ['id','name','category','unit_price','supplier','is_active']
-
-class PurchaseItemInSerializer(serializers.ModelSerializer):
-    class Meta: model = PurchaseItem; fields = ['product','quantity','unit_price']
-
-class PurchaseSerializer(serializers.ModelSerializer):
-    items = PurchaseItemInSerializer(many=True)
-    class Meta:
-        model = Purchase
-        fields = ['id','restaurant','serial','issue_date','notes','total_amount','items']
-        read_only_fields = ['serial','issue_date','total_amount']
-
+# --------- Básicos ---------
 class UnitSerializer(serializers.ModelSerializer):
     class Meta:
         model = Unit
-        fields = "__all__"
+        fields = ("id", "name", "kind", "symbol", "is_currency", "created_at")
 
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ("id", "name", "created_at")
+
+
+class RestaurantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Restaurant
+        fields = ("id", "name", "code", "address", "contact", "created_at")
+
+
+# --------- Productos ---------
+class ProductSerializer(serializers.ModelSerializer):
+    # Mostramos solo ids de relaciones para simplicidad y velocidad
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+    default_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(), allow_null=True, required=False
+    )
+    allowed_units = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(), many=True, required=False
+    )
+    # info derivada amigable (opcional)
+    category_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Product
+        fields = (
+            "id", "name", "category", "category_name",
+            "ref_price", "default_unit", "allowed_units", "created_at"
+        )
+
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category_id else None
+
+    # create/update para M2M allowed_units
+    def create(self, validated_data):
+        allowed = validated_data.pop("allowed_units", [])
+        obj = super().create(validated_data)
+        if allowed:
+            obj.allowed_units.set(allowed)
+        return obj
+
+    def update(self, instance, validated_data):
+        allowed = validated_data.pop("allowed_units", None)
+        obj = super().update(instance, validated_data)
+        if allowed is not None:
+            obj.allowed_units.set(allowed)
+        return obj
+
+
+# --------- Compras formales (futuro) ---------
+class PurchaseItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseItem
+        fields = ("id", "product", "quantity", "unit_price", "line_total")
+
+    read_only_fields = ("line_total",)
+
+
+class PurchaseSerializer(serializers.ModelSerializer):
+    items = PurchaseItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Purchase
+        fields = ("id", "restaurant", "serial", "issue_date", "notes", "total_amount", "items")
+
+
+# --------- Listas de compras (builder) ---------
 class PurchaseListItemSerializer(serializers.ModelSerializer):
+    # Validación de la regla: si la unidad es "Soles", qty es el importe y no se pide price_soles
     class Meta:
         model = PurchaseListItem
-        fields = "__all__"
+        fields = ("id", "purchase_list", "product", "unit", "qty", "price_soles")
 
     def validate(self, attrs):
-        unit = attrs.get("unit")
+        unit = attrs.get("unit") or getattr(self.instance, "unit", None)
         qty = attrs.get("qty")
         price = attrs.get("price_soles")
 
         if unit and unit.is_currency:
-            # Moneda: qty = importe, no debe venir price
-            if price not in (None, 0, 0.0):
-                raise serializers.ValidationError("Para unidad monetaria, no envíes price_soles (usa qty como importe).")
+            # En "Soles": qty es el importe; no debe venir price_soles
+            if price not in (None, ""):
+                raise serializers.ValidationError(
+                    {"price_soles": "No se requiere precio cuando la unidad es 'Soles'."}
+                )
         else:
-            # No moneda: price obligatorio
-            if price is None:
-                raise serializers.ValidationError("price_soles es obligatorio cuando la unidad no es monetaria.")
-        if qty is None or qty <= 0:
-            raise serializers.ValidationError("qty debe ser mayor que 0.")
+            # En otras unidades: price_soles es obligatorio y > 0
+            if price in (None, ""):
+                raise serializers.ValidationError(
+                    {"price_soles": "Precio en soles es obligatorio para unidades no monetarias."}
+                )
+            try:
+                if Decimal(price) <= 0:
+                    raise serializers.ValidationError(
+                        {"price_soles": "El precio debe ser mayor que 0."}
+                    )
+            except Exception:
+                raise serializers.ValidationError({"price_soles": "Precio inválido."})
+
+        if qty is None or Decimal(qty) <= 0:
+            raise serializers.ValidationError({"qty": "Cantidad/importe debe ser mayor que 0."})
+
         return attrs
+
 
 class PurchaseListSerializer(serializers.ModelSerializer):
     items = PurchaseListItemSerializer(many=True, read_only=True)
 
     class Meta:
         model = PurchaseList
-        fields = "__all__"
-
-def create(self, validated_data):
-    items = validated_data.pop('items', [])
-    restaurant = validated_data['restaurant']
-    issue_date = timezone.now()
-    serial = next_serial_for(restaurant, issue_date)
-    purchase = Purchase.objects.create(serial=serial, issue_date=issue_date, **validated_data)
-    total = 0
-    for it in items:
-        unit_price = it.get('unit_price')
-        qty = it.get('quantity')
-        line_total = qty * unit_price
-        PurchaseItem.objects.create(purchase=purchase, line_total=line_total, **it)
-        total += line_total
-    purchase.total_amount = total
-    purchase.save()
-    return purchase
+        fields = (
+            "id", "restaurant", "series_code", "status",
+            "notes", "observation", "created_by", "created_at", "finalized_at",
+            "items",
+        )
+        read_only_fields = ("series_code", "status", "created_by", "created_at", "finalized_at")
