@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Category, Product, Restaurant, Purchase, PurchaseItem, PurchaseList, PurchaseListItem, Unit
-from .services.serials import next_serial_for
+from .services import next_serial_for
 from django.utils import timezone
 
 class CategorySerializer(serializers.ModelSerializer):

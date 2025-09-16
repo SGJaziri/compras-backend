@@ -17,3 +17,7 @@ def generate_series_code(restaurant_code: str, model_cls, year=None):
         )
         seq = base_qs.count() + 1
         return f"{year}-{restaurant_code}-{seq:04d}"
+
+def next_serial_for(model_cls, restaurant_code, year=None):
+    # Alias simple para mantener compatibilidad con serializers
+    return generate_series_code(restaurant_code=restaurant_code, model_cls=model_cls, year=year)
