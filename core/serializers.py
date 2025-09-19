@@ -36,8 +36,8 @@ class ProductSerializer(serializers.ModelSerializer):
         queryset=Unit.objects.all(), many=True, required=False
     )
     # info derivada amigable (opcional)
-    category_name = serializers.SerializerMethodField(read_only=True)
-    default_unit_name = serializers.CharField(source='default_unit.name', read_only=True)
+    category_name = serializers.SerializerMethodField()
+    default_unit_name = serializers.CharField()
 
     class Meta:
         model = Product
@@ -49,7 +49,10 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_category_name(self, obj):
-        return obj.category.name if obj.category_id else None
+        return getattr(obj.category, 'name', None)
+
+    def get_default_unit_name(self, obj):
+        return getattr(obj.default_unit, 'name', None)
 
     # create/update para M2M allowed_units
     def create(self, validated_data):
