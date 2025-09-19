@@ -27,14 +27,13 @@ class RestaurantSerializer(serializers.ModelSerializer):
 
 # --------- Productos ---------
 class ProductSerializer(serializers.ModelSerializer):
-    # Mostramos solo ids de relaciones para simplicidad y velocidad
     category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
     default_unit = serializers.PrimaryKeyRelatedField(
         queryset=Unit.objects.all(), allow_null=True, required=False
     )
 
     category_name = serializers.SerializerMethodField()
-    default_unit_name = serializers.CharField()
+    default_unit_name = serializers.SerializerMethodField()  # <-- CAMBIO
 
     class Meta:
         model = Product
@@ -42,7 +41,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'id', 'name',
             'category', 'category_name',
             'default_unit', 'default_unit_name',
-            'ref_price',           
+            'ref_price',
         ]
 
     def get_category_name(self, obj):
@@ -50,7 +49,6 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_default_unit_name(self, obj):
         return getattr(obj.default_unit, 'name', None)
-
 # --------- Compras formales (futuro) ---------
 class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
