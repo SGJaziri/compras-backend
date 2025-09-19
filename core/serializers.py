@@ -32,10 +32,7 @@ class ProductSerializer(serializers.ModelSerializer):
     default_unit = serializers.PrimaryKeyRelatedField(
         queryset=Unit.objects.all(), allow_null=True, required=False
     )
-    allowed_units = serializers.PrimaryKeyRelatedField(
-        queryset=Unit.objects.all(), many=True, required=False
-    )
-    # info derivada amigable (opcional)
+
     category_name = serializers.SerializerMethodField()
     default_unit_name = serializers.CharField()
 
@@ -53,22 +50,6 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_default_unit_name(self, obj):
         return getattr(obj.default_unit, 'name', None)
-
-    # create/update para M2M allowed_units
-    def create(self, validated_data):
-        allowed = validated_data.pop("allowed_units", [])
-        obj = super().create(validated_data)
-        if allowed:
-            obj.allowed_units.set(allowed)
-        return obj
-
-    def update(self, instance, validated_data):
-        allowed = validated_data.pop("allowed_units", None)
-        obj = super().update(instance, validated_data)
-        if allowed is not None:
-            obj.allowed_units.set(allowed)
-        return obj
-
 
 # --------- Compras formales (futuro) ---------
 class PurchaseItemSerializer(serializers.ModelSerializer):
