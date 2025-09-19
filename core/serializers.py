@@ -37,13 +37,16 @@ class ProductSerializer(serializers.ModelSerializer):
     )
     # info derivada amigable (opcional)
     category_name = serializers.SerializerMethodField(read_only=True)
+    default_unit_name = serializers.CharField(source='default_unit.name', read_only=True)
 
     class Meta:
         model = Product
-        fields = (
-            "id", "name", "category", "category_name",
-            "ref_price", "default_unit", "allowed_units", "created_at"
-        )
+        fields = [
+            'id', 'name',
+            'category', 'category_name',
+            'default_unit', 'default_unit_name',
+            'ref_price',           
+        ]
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category_id else None
