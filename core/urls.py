@@ -1,19 +1,23 @@
+# core/urls.py
 from django.urls import path
 from rest_framework.routers import DefaultRouter
+
 from .views import (
+    PublicConfigView,
     CategoryViewSet, ProductViewSet, RestaurantViewSet, UnitViewSet,
-    PurchaseViewSet, PurchaseListViewSet, PublicConfigView
+    PurchaseViewSet, PurchaseListViewSet,
 )
 
 router = DefaultRouter()
-router.register('categories', CategoryViewSet, basename='category')
-router.register('products', ProductViewSet, basename='product')
-router.register('restaurants', RestaurantViewSet, basename='restaurant')
-router.register('units', UnitViewSet, basename='unit')
-router.register('purchases', PurchaseViewSet, basename='purchase')
-router.register('purchase-lists', PurchaseListViewSet, basename='purchase-list')
+router.register(r'categories', CategoryViewSet, basename='category')
+router.register(r'products', ProductViewSet, basename='product')
+router.register(r'units', UnitViewSet, basename='unit')
+router.register(r'restaurants', RestaurantViewSet, basename='restaurant')
+router.register(r'purchases', PurchaseViewSet, basename='purchase')
+router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list')
 
-urlpatterns = router.urls + [
-    path('public/config',  PublicConfigView.as_view(), name='public-config-no-slash'),
+urlpatterns = [
     path('public/config/', PublicConfigView.as_view(), name='public-config'),
 ]
+
+urlpatterns += router.urls

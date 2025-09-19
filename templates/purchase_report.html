@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <title>Reporte de Compras</title>
+  <style>
+    body { font-family: sans-serif; font-size: 12px; color:#111; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    h2 { font-size: 14px; margin: 14px 0 6px; }
+    small { color:#555; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
+    th, td { border: 1px solid #ccc; padding: 6px; }
+    th { background:#f5f5f5; text-align:left; }
+    .right { text-align: right; }
+    .center { text-align: center; }
+    .muted { color:#555; }
+    .group { background:#f8f8f8; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Reporte de Compras</h1>
+  <p class="muted">
+    Rango: {{ start }} a {{ end }}{% if only_final %} — (solo listas finalizadas){% endif %}
+  </p>
+
+  {% for r in restaurants %}
+    <h2>Restaurante: {{ r.restaurant }}</h2>
+
+    {% for g in r.categories %}
+      <p class="muted"><strong>Categoría:</strong> {{ g.category }}</p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:16%">Fecha</th>
+            <th style="width:28%">Producto</th>
+            <th style="width:14%">Unidad</th>
+            <th style="width:14%" class="right">Cantidad</th>
+            <th style="width:14%" class="right">Precio (S/)</th>
+            <th style="width:14%" class="right">Subtotal (S/)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ln in g.lines %}
+            <tr>
+              <td>{{ ln.date }}</td>
+              <td>{{ ln.product }}</td>
+              <td class="center">{{ ln.unit }}</td>
+              <td class="right">{{ ln.qty }}</td>
+              <td class="right">{% if ln.price %}{{ ln.price }}{% else %}-{% endif %}</td>
+              <td class="right">{% if ln.subtotal %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+            </tr>
+          {% endfor %}
+          <tr class="group">
+            <td colspan="5" class="right">Subtotal categoría</td>
+            <td class="right">S/ {{ g.total|floatformat:2 }}</td>
+          </tr>
+        </tbody>
+      </table>
+    {% endfor %}
+
+    <table>
+      <tbody>
+        <tr class="group">
+          <td colspan="5" class="right">Total restaurante</td>
+          <td class="right">S/ {{ r.total|floatformat:2 }}</td>
+        </tr>
+      </tbody>
+    </table>
+  {% endfor %}
+
+  <h2 class="right">TOTAL GENERAL: S/ {{ grand_total|floatformat:2 }}</h2>
+</body>
+</html>

@@ -1,8 +1,12 @@
+# core/models.py
 from decimal import Decimal
+
 from django.conf import settings
-from django.core.validators import MinValueValidator, MaxLengthValidator
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
+
 
 # -----------------------------------
 # Catálogo de Unidades
@@ -15,16 +19,20 @@ class Unit(models.Model):
         ("package", "Package"),
         ("other", "Other"),
     )
-    name = models.CharField(max_length=40, unique=True)            # 'Kg', 'g', 'Unidades', 'Soles', 'Paquetes'
+
+    # Ej.: 'Kilogramo', 'Unidad', 'Soles'
+    name = models.CharField(max_length=40, unique=True)
     kind = models.CharField(max_length=20, choices=KIND_CHOICES, default="other")
-    symbol = models.CharField(max_length=10, blank=True, null=True)  # 'kg', 'g', 'S/', etc.
+    # Ej.: 'kg', 'uni', 'S/'
+    symbol = models.CharField(max_length=10, blank=True, null=True)
+    # Si es True, la cantidad (qty) representa un importe en S/
     is_currency = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -38,7 +46,7 @@ class Category(models.Model):
     class Meta:
         ordering = ["name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -46,36 +54,45 @@ class Restaurant(models.Model):
     name = models.CharField(max_length=120, unique=True)
     address = models.CharField(max_length=200, blank=True, null=True)
     contact = models.CharField(max_length=120, blank=True, null=True)
-    code = models.CharField(max_length=3, unique=True)  # ej. 'ALP', 'MIL'
+    # Código corto, ej.: 'ALP', 'MIL'
+    code = models.CharField(max_length=3, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
 
     def save(self, *args, **kwargs):
+        # Normalizamos a 3 letras mayúsculas
         if self.code:
             self.code = self.code.upper()[:3]
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.name} ({self.code})"
 
 
 class Product(models.Model):
     name = models.CharField(max_length=120)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, related_name="products"
+    )
     ref_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    default_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
-    allowed_units = models.ManyToManyField(Unit, blank=True)  # menú de unidades
+    default_unit = models.ForeignKey(
+        Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    # Menú de unidades permitidas para este producto (opcional)
+    allowed_units = models.ManyToManyField(Unit, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["name", "category"], name="uniq_product_name_per_category"),
+            models.UniqueConstraint(
+                fields=["name", "category"], name="uniq_product_name_per_category"
+            ),
         ]
         ordering = ["name"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.name} / {self.category.name}"
 
 
@@ -83,31 +100,45 @@ class Product(models.Model):
 # Compras formales (opcional para futuras extensiones)
 # -----------------------------------
 class Purchase(models.Model):
-    restaurant = models.ForeignKey(Restaurant, on_delete=models.PROTECT, related_name="purchases")
+    restaurant = models.ForeignKey(
+        Restaurant, on_delete=models.PROTECT, related_name="purchases"
+    )
     serial = models.CharField(max_length=32, unique=True)
     issue_date = models.DateTimeField(default=timezone.now)
     notes = models.TextField(blank=True)
-    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
 
     class Meta:
         ordering = ["-issue_date"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.serial} - {self.restaurant.name}"
 
 
 class PurchaseItem(models.Model):
-    purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name="items")
+    purchase = models.ForeignKey(
+        Purchase, on_delete=models.CASCADE, related_name="items"
+    )
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    quantity = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.00"))])
+    quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    unit_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
     line_total = models.DecimalField(max_digits=12, decimal_places=2, editable=False)
 
     def save(self, *args, **kwargs):
         self.line_total = (self.quantity or Decimal("0")) * (self.unit_price or Decimal("0"))
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.product.name} x {self.quantity}"
 
 
@@ -116,32 +147,43 @@ class PurchaseItem(models.Model):
 # -----------------------------------
 class PurchaseList(models.Model):
     STATUS = (("draft", "Draft"), ("final", "Final"))
-    restaurant = models.ForeignKey(Restaurant, on_delete=models.PROTECT, related_name="lists")
+
+    restaurant = models.ForeignKey(
+        Restaurant, on_delete=models.PROTECT, related_name="lists"
+    )
     series_code = models.CharField(max_length=20, blank=True, null=True, db_index=True)
     status = models.CharField(max_length=10, choices=STATUS, default="draft")
-    notes = models.TextField(blank=True, null=True)         # notas generales
-    observation = models.TextField(blank=True, null=True)   # observación del restaurante (no va al PDF)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    notes = models.TextField(blank=True, null=True)         # notas generales (PDF)
+    observation = models.TextField(blank=True, null=True)   # observación interna
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     finalized_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         ordering = ["-created_at"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.series_code or 'DRAFT'} - {self.restaurant.code}"
 
 
 class PurchaseListItem(models.Model):
-    purchase_list = models.ForeignKey(PurchaseList, on_delete=models.CASCADE, related_name="items")
+    purchase_list = models.ForeignKey(
+        PurchaseList, on_delete=models.CASCADE, related_name="items"
+    )
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     unit = models.ForeignKey(Unit, on_delete=models.PROTECT)
+
+    # Regla: si la unidad es moneda, qty es el **importe**; en otro caso, qty es la cantidad
     qty = models.DecimalField(
         max_digits=12,
         decimal_places=3,
-        validators=[MinValueValidator(Decimal("0.001"))],  # si unidad=“Soles”: monto mínimo 0.001
+        validators=[MinValueValidator(Decimal("0.001"))],
         help_text="Si la unidad es 'Soles', qty representa el importe en S/."
     )
+
+    # Solo aplica cuando la unidad **no** es monetaria
     price_soles = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -158,22 +200,24 @@ class PurchaseListItem(models.Model):
     def clean(self):
         # Validaciones coherentes según tipo de unidad
         if self.unit and self.unit.is_currency:
-            # Moneda: qty = importe; price_soles debe ser None
+            # Moneda: qty = importe; price_soles no debe venir
             if self.price_soles not in (None, Decimal("0"), Decimal("0.00")):
-                from django.core.exceptions import ValidationError
-                raise ValidationError("Para unidad monetaria, no debe enviarse price_soles (use solo qty como importe).")
+                raise ValidationError(
+                    "Para unidad monetaria, no debe enviarse price_soles (use solo qty como importe)."
+                )
         else:
             # No moneda: exige price_soles
             if self.price_soles is None:
-                from django.core.exceptions import ValidationError
-                raise ValidationError("price_soles es obligatorio cuando la unidad no es monetaria.")
+                raise ValidationError(
+                    "price_soles es obligatorio cuando la unidad no es monetaria."
+                )
 
     @property
     def subtotal_soles(self) -> Decimal:
-        # regla: si is_currency => subtotal = qty; else = qty * price
+        """Si la unidad es monetaria => subtotal = qty; de lo contrario: qty * price_soles."""
         if self.unit and self.unit.is_currency:
             return self.qty or Decimal("0")
         return (self.price_soles or Decimal("0")) * (self.qty or Decimal("0"))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.product.name} ({self.unit.name})"

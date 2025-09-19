@@ -84,6 +84,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
 # --------- Listas de compras (builder) ---------
 class PurchaseListItemSerializer(serializers.ModelSerializer):
     # Validación de la regla: si la unidad es "Soles", qty es el importe y no se pide price_soles
+    
     class Meta:
         model = PurchaseListItem
         fields = ("id", "purchase_list", "product", "unit", "qty", "price_soles")
