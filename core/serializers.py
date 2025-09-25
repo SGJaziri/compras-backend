@@ -74,36 +74,34 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
         model = PurchaseListItem
         fields = ("id", "purchase_list", "product", "unit", "qty", "price_soles", "created_at")
         extra_kwargs = {
-            "price_soles": {"required": False, "allow_null": True},  
+            "price_soles": {"required": False, "allow_null": True},  # ✅ clave V2
         }
 
     def validate(self, attrs):
+        # Obtenemos unidad y lista para aplicar reglas coherentes
         unit = attrs.get("unit") or getattr(self.instance, "unit", None)
-        qty = attrs.get("qty")
-        price = attrs.get("price_soles")
+        pl   = attrs.get("purchase_list") or getattr(self.instance, "purchase_list", None)
+        qty  = attrs.get("qty") if "qty" in attrs else getattr(self.instance, "qty", None)
+        price = attrs.get("price_soles") if "price_soles" in attrs else getattr(self.instance, "price_soles", None)
 
-        if unit and unit.is_currency:
-            # En "Soles": qty es el importe; no debe venir price_soles
-            if price not in (None, ""):
-                raise serializers.ValidationError(
-                    {"price_soles": "No se requiere precio cuando la unidad es 'Soles'."}
-                )
+        if not unit or not isinstance(unit, Unit):
+            raise serializers.ValidationError({"unit": "Unidad inválida."})
+        if not pl or not isinstance(pl, PurchaseList):
+            raise serializers.ValidationError({"purchase_list": "Lista inválida."})
+        if qty is None:
+            raise serializers.ValidationError({"qty": "Cantidad requerida."})
+
+        # Reglas V2:
+        # - Si la unidad es monetaria: no se usa price_soles (qty ya es el importe)
+        # - Si la unidad NO es monetaria:
+        #     * en 'draft' se permite price_soles = null
+        #     * en 'final' se exige price_soles
+        if unit.is_currency:
+            # Normalizamos a None para evitar conflictos con clean()
+            attrs["price_soles"] = None
         else:
-            # En otras unidades: price_soles es obligatorio y > 0
-            if price in (None, ""):
-                raise serializers.ValidationError(
-                    {"price_soles": "Precio en soles es obligatorio para unidades no monetarias."}
-                )
-            try:
-                if Decimal(price) <= 0:
-                    raise serializers.ValidationError(
-                        {"price_soles": "El precio debe ser mayor que 0."}
-                    )
-            except Exception:
-                raise serializers.ValidationError({"price_soles": "Precio inválido."})
-
-        if qty is None or Decimal(qty) <= 0:
-            raise serializers.ValidationError({"qty": "Cantidad/importe debe ser mayor que 0."})
+            if pl.status == "final" and price is None:
+                raise serializers.ValidationError({"price_soles": "Requerido al finalizar la lista (unidad no monetaria)."})
 
         return attrs
 
