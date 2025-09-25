@@ -38,8 +38,10 @@
           <th style="width:40%">Producto</th>
           <th style="width:15%">Unidad</th>
           <th style="width:15%" class="right">Cantidad</th>
-          <th style="width:15%" class="right">Precio (S/)</th>
-          <th style="width:15%" class="right">Subtotal (S/)</th>
+          {% if show_prices %}
+            <th style="width:15%" class="right">Precio (S/)</th>
+            <th style="width:15%" class="right">Subtotal (S/)</th>
+          {% endif %}
         </tr>
       </thead>
       <tbody>
@@ -48,20 +50,25 @@
             <td>{{ ln.product }}</td>
             <td>{{ ln.unit }}</td>
             <td class="right">{{ ln.qty }}</td>
-            <td class="right">{% if ln.price %}{{ ln.price }}{% else %}<span class="muted">-</span>{% endif %}</td>
-            <td class="right">{% if ln.subtotal %}{{ ln.subtotal }}{% else %}<span class="muted">-</span>{% endif %}</td>
+            {% if show_prices %}
+              <td class="right">{% if ln.price is not None %}{{ ln.price }}{% else %}-{% endif %}</td>
+              <td class="right">{% if ln.subtotal is not None %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+            {% endif %}
           </tr>
         {% endfor %}
       </tbody>
       <tfoot>
-        <tr>
-          <td colspan="4" class="right">Subtotal categoría</td>
-          <td class="right">S/ {{ g.group_total|floatformat:2 }}</td>
-        </tr>
+        {% if show_prices %}
+          <tr>
+            <td colspan="4" class="right">Subtotal categoría</td>
+            <td class="right">S/ {{ g.group_total|floatformat:2 }}</td>
+          </tr>
+        {% endif %}
       </tfoot>
     </table>
   {% endfor %}
-
+  {% if show_prices %}    
   <div class="grand">TOTAL GENERAL: S/ {{ grand_total }}</div>
+  {% endif %}
 </body>
 </html>
