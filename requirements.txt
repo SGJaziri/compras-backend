@@ -24,3 +24,5 @@ whitenoise
 dj-database-url>=2.0
 
 xhtml2pdf
+Pillow>=9.4.0
+html5lib>=1.1
