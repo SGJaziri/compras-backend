@@ -1,28 +1,18 @@
-Django>=5.0,<6.0
-djangorestframework>=3.15
-django-filter>=24.2
-dj-database-url>=2.1
-psycopg2-binary>=2.9
+Django==5.2.6
+djangorestframework==3.16.1
+django-filter==24.2
+dj-database-url==2.3.0
+psycopg2-binary==2.9.10
 
-# Autenticación con JWT
-djangorestframework-simplejwt>=5.3
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.4.0
 
-# CORS
-django-cors-headers>=4.3
+openpyxl==3.1.5
+xhtml2pdf==0.2.15
+reportlab==4.2.2
+Pillow==10.4.0
+html5lib==1.1
 
-# Exportación de reportes
-openpyxl>=3.1  # XLSX para consumos diarios
-xhtml2pdf>=0.2.15  # generar PDFs simples
-
-# Opcional (si usas weasyprint en lugar de xhtml2pdf)
-# weasyprint>=61.0
-
-python-dotenv
-reportlab
-gunicorn
-whitenoise
-dj-database-url>=2.0
-
-xhtml2pdf
-Pillow>=9.4.0
-html5lib>=1.1
+python-dotenv==1.0.1
+gunicorn==22.0.0
+whitenoise==6.6.0
