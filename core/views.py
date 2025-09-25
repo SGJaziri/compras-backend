@@ -156,6 +156,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
                          else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
+                "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
             }
             groups_map.setdefault(cat, []).append(line)
 
@@ -437,7 +438,10 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
             price = (it.price_soles or Decimal("0"))
             qty   = (it.qty or Decimal("0"))
-            raw_subtotal = qty if getattr(it.unit, "is_currency", False) else (qty * price)
+            is_curr = bool(getattr(it.unit, "is_currency", False))
+            ulabel  = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
+
+            raw_subtotal = qty if is_curr else (qty * price)
             subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             r = rest_map.setdefault(rest, {"categories": {}, "total": Decimal("0.00")})
@@ -447,9 +451,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 "product": it.product.name,
                 "unit": ulabel,
                 "qty": float(qty),
-                "price": None if getattr(it.unit, "is_currency", False)
-                         else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
+                "unit_is_currency": is_curr,
             })
             c["total"] = (c["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             r["total"] = (r["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
