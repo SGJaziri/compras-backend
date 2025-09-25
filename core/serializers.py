@@ -72,7 +72,10 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = PurchaseListItem
-        fields = ("id", "purchase_list", "product", "unit", "qty", "price_soles")
+        fields = ("id", "purchase_list", "product", "unit", "qty", "price_soles", "created_at")
+        extra_kwargs = {
+            "price_soles": {"required": False, "allow_null": True},  
+        }
 
     def validate(self, attrs):
         unit = attrs.get("unit") or getattr(self.instance, "unit", None)
