@@ -146,9 +146,11 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
             grand_total += subtotal
 
+            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
+
             line = {
                 "product": it.product.name,
-                "unit": it.unit.name,
+                "unit": ulabel,
                 "qty": float(qty),
                 # si es moneda, no hay price; y si hide_prices está activo, tampoco
                 "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
@@ -443,7 +445,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             c["lines"].append({
                 "date": it.purchase_list.created_at.date().isoformat(),
                 "product": it.product.name,
-                "unit": it.unit.name,
+                "unit": ulabel,
                 "qty": float(qty),
                 "price": None if getattr(it.unit, "is_currency", False)
                          else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
