@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from datetime import date as date_cls
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
-from django.core.exceptions import ValidationError  # ✅ faltaba
+from django.core.exceptions import ValidationError
 
 from .models import (
     Category, Product, Restaurant, Purchase,
@@ -21,8 +21,6 @@ from .serializers import (
     CategorySerializer, ProductSerializer, RestaurantSerializer, PurchaseSerializer,
     PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer
 )
-# from .services import generate_series_code   # ❌ no se usa aquí
-
 
 # --- (opcional) Mixin de lectura pública
 class PublicReadMixin:
@@ -175,7 +173,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
             "lines": flat_lines,
             "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-            # 👇 añadimos flags y observación para la plantilla
+            # flags y observación para la plantilla
             "show_prices": show_prices,
             "observation": (pl.observation or ""),
         }
@@ -215,11 +213,21 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             self._ensure_complete_prices(pl)
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
+
         pl.status = "final"
         pl.finalized_at = timezone.now()
         if not pl.series_code:
-            from .services.serials import next_series_code
-            pl.series_code = next_series_code(pl.restaurant)
+            # Fallback robusto para generar la serie
+            try:
+                from .services.serials import next_series_code
+                pl.series_code = next_series_code(pl.restaurant)
+            except Exception:
+                try:
+                    from .services import generate_series_code
+                    pl.series_code = generate_series_code(pl.restaurant)
+                except Exception:
+                    pl.series_code = f"{timezone.now().year}-{pl.restaurant.code}-{pl.id:04d}"
+
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
@@ -243,8 +251,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
         try:
             obj = ser.save()
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=400)
         except Exception as e:
-            # 🔎 convierte cualquier error en 400 con mensaje visible (y no 500)
             return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
         return Response(PurchaseListItemSerializer(obj).data, status=201)
@@ -304,11 +313,21 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.status = "final"
         pl.finalized_at = timezone.now()
         if not pl.series_code:
-            from .services.serials import next_series_code
-            pl.series_code = next_series_code(pl.restaurant)
+            # Fallback robusto para generar la serie
+            try:
+                from .services.serials import next_series_code
+                pl.series_code = next_series_code(pl.restaurant)
+            except Exception:
+                try:
+                    from .services import generate_series_code
+                    pl.series_code = generate_series_code(pl.restaurant)
+                except Exception:
+                    pl.series_code = f"{timezone.now().year}-{pl.restaurant.code}-{pl.id:04d}"
+
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response(
-            {"detail": f"Lista completada y finalizada. ({updated} ítems actualizados)", "id": pl.id, "series_code": pl.series_code},
+            {"detail": f"Lista completada y finalizada. ({updated} ítems actualizados)",
+             "id": pl.id, "series_code": pl.series_code},
             status=200
         )
 
