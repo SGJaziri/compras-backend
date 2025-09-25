@@ -233,13 +233,21 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
                             status=status.HTTP_400_BAD_REQUEST)
+
         data = request.data.copy()
         data['purchase_list'] = pl.id
         ser = PurchaseListItemSerializer(data=data)
-        if ser.is_valid():
-            ser.save()
-            return Response(ser.data, status=201)
-        return Response(ser.errors, status=400)
+
+        if not ser.is_valid():
+            return Response(ser.errors, status=400)
+
+        try:
+            obj = ser.save()
+        except Exception as e:
+            # 🔎 convierte cualquier error en 400 con mensaje visible (y no 500)
+            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
+
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
 
     @action(
         detail=True, methods=['post'], url_path='complete',
