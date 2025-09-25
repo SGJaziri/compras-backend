@@ -46,8 +46,13 @@
               <td>{{ ln.product }}</td>
               <td class="center">{{ ln.unit }}</td>
               <td class="right">{{ ln.qty }}</td>
-              <td class="right">{% if ln.price %}{{ ln.price }}{% else %}-{% endif %}</td>
-              <td class="right">{% if ln.subtotal %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+              {% if ln.unit_is_currency %}
+                <td class="right">-</td>
+                <td class="right">{{ ln.subtotal }}</td>
+              {% else %}
+                <td class="right">{% if ln.price %}{{ ln.price }}{% else %}-{% endif %}</td>
+                <td class="right">{% if ln.subtotal %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+              {% endif %}
             </tr>
           {% endfor %}
           <tr class="group">

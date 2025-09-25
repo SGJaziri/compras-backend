@@ -57,8 +57,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = ("id", "product", "quantity", "unit_price", "line_total")
-
-    read_only_fields = ("line_total",)
+        read_only_fields = ("line_total",)
 
 
 class PurchaseSerializer(serializers.ModelSerializer):
@@ -75,6 +74,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField(read_only=True)
     unit_name = serializers.SerializerMethodField(read_only=True)
     unit_is_currency = serializers.SerializerMethodField(read_only=True)
+    subtotal_soles = serializers.SerializerMethodField(read_only=True)  # <- OK
 
     class Meta:
         model = PurchaseListItem
@@ -85,9 +85,9 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
             "unit", "unit_name", "unit_is_currency",
             "qty",
             "price_soles",
+            "subtotal_soles",  # <- AÑADIR
         )
         extra_kwargs = {
-            # V2: precio no es requerido en borrador; permitimos null
             "price_soles": {"required": False, "allow_null": True},
         }
 
@@ -101,16 +101,24 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     def get_unit_is_currency(self, obj):
         return bool(getattr(obj.unit, "is_currency", False))
 
+    def get_subtotal_soles(self, obj):
+        """
+        Si la unidad es monetaria (S/), el subtotal es la cantidad (importe).
+        Si no, subtotal = qty * price_soles, tolerando None.
+        """
+        try:
+            is_currency = bool(getattr(obj.unit, "is_currency", False))
+            q = obj.qty or Decimal("0")
+            if is_currency:
+                return q
+            p = obj.price_soles or Decimal("0")
+            return q * p
+        except Exception:
+            # fallback súper defensivo para no romper la respuesta
+            return Decimal("0")
+
     # ------- Validación V2 -------
     def validate(self, attrs):
-        """
-        Reglas:
-        - Si la unidad es monetaria (is_currency=True): qty es el importe, price_soles no aplica (forzamos None).
-        - Si la unidad NO es monetaria:
-            * En 'draft' permitimos price_soles = None.
-            * En 'final' price_soles es obligatorio.
-        """
-        # Import local para evitar dependencias circulares en algunos entornos
         from .models import Unit as UnitModel, PurchaseList as PurchaseListModel
 
         unit = attrs.get("unit") or getattr(self.instance, "unit", None)
@@ -129,9 +137,10 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
             # qty = importe; normalizamos price_soles a None
             attrs["price_soles"] = None
         else:
+            # En borrador permitimos price_soles = None; en final es obligatorio
             if pl.status == "final" and price is None:
                 raise serializers.ValidationError({
-                    "price_soles": "Requerido al finalizar la lista (unidad no monetaria)."
+                    "price_soles": "Requerido al finalizar (unidad no monetaria)."
                 })
 
         return attrs

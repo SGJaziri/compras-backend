@@ -7,7 +7,6 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-
 # -----------------------------------
 # Catálogo de Unidades
 # -----------------------------------
@@ -176,21 +175,9 @@ class PurchaseListItem(models.Model):
     unit = models.ForeignKey(Unit, on_delete=models.PROTECT)
 
     # Regla: si la unidad es moneda, qty es el **importe**; en otro caso, qty es la cantidad
-    qty = models.DecimalField(
-        max_digits=12,
-        decimal_places=3,
-        validators=[MinValueValidator(Decimal("0.001"))],
-        help_text="Si la unidad es 'Soles', qty representa el importe en S/."
-    )
-
-    # Solo aplica cuando la unidad **no** es monetaria
-    price_soles = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        blank=True,
-        null=True,
-        help_text="Obligatorio si la unidad no es moneda; debe quedar vacío si la unidad es moneda."
-    )
+    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    price_soles = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    unit = models.ForeignKey('Unit', on_delete=models.PROTECT)
 
     class Meta:
         indexes = [
@@ -215,11 +202,14 @@ class PurchaseListItem(models.Model):
                 )
 
     @property
-    def subtotal_soles(self) -> Decimal:
-        """Si la unidad es monetaria => subtotal = qty; de lo contrario: qty * price_soles."""
-        if self.unit and self.unit.is_currency:
-            return self.qty or Decimal("0")
-        return (self.price_soles or Decimal("0")) * (self.qty or Decimal("0"))
+    def subtotal_soles(self):
+        # Si la unidad es monetaria, el subtotal ES la cantidad
+        if self.unit and getattr(self.unit, "is_currency", False):
+            return self.qty or Decimal('0')
+        # Si no es monetaria, multiplicamos con tolerancia a None
+        q = self.qty or Decimal('0')
+        p = self.price_soles or Decimal('0')
+        return q * p
 
     def __str__(self) -> str:
         return f"{self.product.name} ({self.unit.name})"

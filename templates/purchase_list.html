@@ -19,7 +19,7 @@
     .tbl { width: 100%; border-collapse: collapse; }
     .tbl th, .tbl td { border: 1px solid #ddd; padding: 8px; }
     .tbl thead th { background: #f5f5f5; text-align: left; }
-    .prewrap { white-space: pre-wrap; } /* respeta saltos de línea del usuario */
+    .prewrap { white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -56,39 +56,39 @@
             <td>{{ ln.unit }}</td>
             <td class="right">{{ ln.qty }}</td>
             {% if show_prices %}
-              <td class="right">{% if ln.price is not None %}{{ ln.price }}{% else %}-{% endif %}</td>
-              <td class="right">{% if ln.subtotal is not None %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+              {% if ln.unit_is_currency %}
+                <td class="right">-</td>
+                <td class="right">{{ ln.subtotal }}</td>
+              {% else %}
+                <td class="right">{% if ln.price is not None %}{{ ln.price }}{% else %}-{% endif %}</td>
+                <td class="right">{% if ln.subtotal is not None %}{{ ln.subtotal }}{% else %}-{% endif %}</td>
+              {% endif %}
             {% endif %}
           </tr>
         {% endfor %}
       </tbody>
+      {% if show_prices %}
       <tfoot>
-        {% if show_prices %}
-          <tr>
-            <td colspan="4" class="right">Subtotal categoría</td>
-            <td class="right">S/ {{ g.group_total|floatformat:2 }}</td>
-          </tr>
-        {% endif %}
+        <tr>
+          <td colspan="4" class="right">Subtotal categoría</td>
+          <td class="right">S/ {{ g.group_total|floatformat:2 }}</td>
+        </tr>
       </tfoot>
+      {% endif %}
     </table>
   {% endfor %}
-  {% if show_prices %}    
-  <div class="grand">TOTAL GENERAL: S/ {{ grand_total }}</div>
+
+  {% if show_prices %}
+    <div class="grand">TOTAL GENERAL: S/ {{ grand_total|floatformat:2 }}</div>
   {% endif %}
+
   {% if observation %}
-  <table class="tbl no-break" style="margin-top: 16px;">
-    <thead>
-      <tr>
-        <th>Observaciones</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <!-- Mostramos el texto tal cual, respetando saltos de línea -->
-        <td class="prewrap">{{ observation }}</td>
-      </tr>
-    </tbody>
-  </table>
-{% endif %}
+    <table class="tbl no-break" style="margin-top: 16px;">
+      <thead><tr><th>Observaciones</th></tr></thead>
+      <tbody>
+        <tr><td class="prewrap">{{ observation }}</td></tr>
+      </tbody>
+    </table>
+  {% endif %}
 </body>
 </html>
