@@ -15,6 +15,11 @@
     tfoot td { font-weight:bold; }
     .muted { color:#777; }
     .grand { margin-top:14px; font-weight:bold; text-align:right; }
+    .no-break { page-break-inside: avoid; }
+    .tbl { width: 100%; border-collapse: collapse; }
+    .tbl th, .tbl td { border: 1px solid #ddd; padding: 8px; }
+    .tbl thead th { background: #f5f5f5; text-align: left; }
+    .prewrap { white-space: pre-wrap; } /* respeta saltos de línea del usuario */
   </style>
 </head>
 <body>
@@ -70,5 +75,20 @@
   {% if show_prices %}    
   <div class="grand">TOTAL GENERAL: S/ {{ grand_total }}</div>
   {% endif %}
+  {% if observation %}
+  <table class="tbl no-break" style="margin-top: 16px;">
+    <thead>
+      <tr>
+        <th>Observaciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <!-- Mostramos el texto tal cual, respetando saltos de línea -->
+        <td class="prewrap">{{ observation }}</td>
+      </tr>
+    </tbody>
+  </table>
+{% endif %}
 </body>
 </html>
