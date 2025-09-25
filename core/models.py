@@ -198,7 +198,7 @@ class PurchaseListItem(models.Model):
         ]
 
     def clean(self):
-        # Validaciones coherentes según tipo de unidad
+    # Validaciones coherentes según tipo de unidad
         if self.unit and self.unit.is_currency:
             # Moneda: qty = importe; price_soles no debe venir
             if self.price_soles not in (None, Decimal("0"), Decimal("0.00")):
@@ -206,10 +206,12 @@ class PurchaseListItem(models.Model):
                     "Para unidad monetaria, no debe enviarse price_soles (use solo qty como importe)."
                 )
         else:
-            # No moneda: exige price_soles
-            if self.price_soles is None:
+            # No moneda:
+            # Permitir price_soles vacío mientras la lista esté en borrador (draft).
+            # Exigir price_soles solo cuando la lista se vaya a finalizar.
+            if self.purchase_list and self.purchase_list.status == "final" and self.price_soles is None:
                 raise ValidationError(
-                    "price_soles es obligatorio cuando la unidad no es monetaria."
+                    "price_soles es obligatorio para unidades no monetarias al finalizar la lista."
                 )
 
     @property

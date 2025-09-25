@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from datetime import date as date_cls
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
+from django.core.exceptions import ValidationError  # ✅ faltaba
 
 from .models import (
     Category, Product, Restaurant, Purchase,
@@ -20,7 +21,7 @@ from .serializers import (
     CategorySerializer, ProductSerializer, RestaurantSerializer, PurchaseSerializer,
     PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer
 )
-from .services import generate_series_code
+# from .services import generate_series_code   # ❌ no se usa aquí
 
 
 # --- (opcional) Mixin de lectura pública
@@ -102,11 +103,6 @@ class PurchaseViewSet(viewsets.ModelViewSet):
 
 # --------------- Listas (flujo público) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
-    """
-    Público temporal: list, retrieve, create, add_item, finalize,
-    pdf, export_by_date, export_range, export_range_pdf
-    Admin: update/partial_update/destroy
-    """
     queryset = PurchaseList.objects.prefetch_related('items', 'restaurant').all()
     serializer_class = PurchaseListSerializer
 
@@ -116,53 +112,26 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         public_actions = [
-            'list', 'retrieve', 'create', 'add_item', 'finalize',
+            'list', 'retrieve', 'create', 'add_item', 'finalize', 'complete',
             'pdf', 'export_by_date', 'export_range', 'export_range_pdf'
         ]
         if self.action in public_actions:
             return [permissions.AllowAny()]
         return super().get_permissions()
 
-    @action(
-        detail=True, methods=['post'], url_path='finalize',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
-    def finalize(self, request, pk=None):
-        pl = self.get_object()
-        if pl.status == "final":
-            return Response(
-                {"detail": "La lista ya está finalizada."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if not pl.series_code:
-            pl.series_code = generate_series_code(pl.restaurant.code, PurchaseList)
-        pl.status = "final"
-        pl.finalized_at = timezone.now()
-        pl.save()
-        return Response(PurchaseListSerializer(pl).data, status=200)
-
-    @action(
-        detail=True, methods=['post'], url_path='items',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
-    def add_item(self, request, pk=None):
-        """Agregar ítem a la lista (builder público)."""
-        pl = self.get_object()
-        if pl.status == "final":
-            return Response(
-                {"detail": "No se pueden editar listas finalizadas."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        data = request.data.copy()
-        data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data)
-        if ser.is_valid():
-            ser.save()
-            return Response(ser.data, status=201)
-        return Response(ser.errors, status=400)
-
     # ---------- Helpers internos (NO @action) ----------
-    def _render_pdf_html(self, request, pl):
+    def _ensure_complete_prices(self, pl: PurchaseList):
+        """Verifica que todos los ítems no monetarios tengan price_soles."""
+        missing = []
+        for it in pl.items.select_related("unit", "product").all():
+            if it.unit and not it.unit.is_currency:
+                if it.price_soles in (None,):
+                    missing.append(it.product.name)
+        if missing:
+            msg = "Faltan precios en: " + ", ".join(missing[:10])
+            raise ValidationError(msg if len(missing) <= 10 else msg + f" y {len(missing)-10} más")
+
+    def _render_pdf_html(self, request, pl: PurchaseList, show_prices: bool = True):
         """Construye el HTML del PDF agrupando por categoría con decimales correctos."""
         items_qs = pl.items.select_related("product__category", "unit").all()
 
@@ -183,7 +152,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 "product": it.product.name,
                 "unit": it.unit.name,
                 "qty": float(qty),
-                "price": None if getattr(it.unit, "is_currency", False)
+                # si es moneda, no hay price; y si hide_prices está activo, tampoco
+                "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
                          else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
             }
@@ -205,12 +175,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
             "lines": flat_lines,
             "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
+            # 👇 añadimos flags y observación para la plantilla
+            "show_prices": show_prices,
+            "observation": (pl.observation or ""),
         }
         html = render_to_string("purchase_list.html", ctx)
         return html
 
-    def _render_pdf_bytes(self, request, pl):
-        html = self._render_pdf_html(request, pl)
+    def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True):
+        html = self._render_pdf_html(request, pl, show_prices=show_prices)
         # 1) WeasyPrint
         try:
             from weasyprint import HTML  # import perezoso
@@ -228,15 +201,123 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 pass
         return None
 
+    # ---------- Acciones ----------
+    @action(
+        detail=True, methods=['post'], url_path='finalize',
+        permission_classes=[permissions.AllowAny], authentication_classes=[]
+    )
+    def finalize(self, request, pk=None):
+        """Finaliza una lista solo si todos los ítems no monetarios tienen precio."""
+        pl = self.get_object()
+        if pl.status == "final":
+            return Response({"detail": "La lista ya está finalizada."}, status=400)
+        try:
+            self._ensure_complete_prices(pl)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+        pl.status = "final"
+        pl.finalized_at = timezone.now()
+        if not pl.series_code:
+            from .services.serials import next_series_code
+            pl.series_code = next_series_code(pl.restaurant)
+        pl.save(update_fields=["status", "finalized_at", "series_code"])
+        return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
+
+    @action(
+        detail=True, methods=['post'], url_path='items',
+        permission_classes=[permissions.AllowAny], authentication_classes=[]
+    )
+    def add_item(self, request, pk=None):
+        """Agregar ítem a la lista (builder público)."""
+        pl = self.get_object()
+        if pl.status == "final":
+            return Response({"detail": "No se pueden editar listas finalizadas."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        data = request.data.copy()
+        data['purchase_list'] = pl.id
+        ser = PurchaseListItemSerializer(data=data)
+        if ser.is_valid():
+            ser.save()
+            return Response(ser.data, status=201)
+        return Response(ser.errors, status=400)
+
+    @action(
+        detail=True, methods=['post'], url_path='complete',
+        permission_classes=[permissions.AllowAny], authentication_classes=[]
+    )
+    def complete(self, request, pk=None):
+        """
+        Completa una lista en borrador: actualiza precios de ítems y guarda una observación.
+        Si después de actualizar todo queda completo, finaliza automáticamente.
+        Payload:
+        {
+            "items": [{ "id": <item_id>, "price_soles": <number|null> }, ...],
+            "observation": "<texto opcional>"
+        }
+        """
+        pl = self.get_object()
+        if pl.status == "final":
+            return Response({"detail": "La lista ya está finalizada."}, status=400)
+
+        items_payload = request.data.get("items", [])
+        obs = request.data.get("observation")
+
+        # Observación
+        if obs is not None:
+            pl.observation = str(obs).strip() or None
+            pl.save(update_fields=["observation"])
+
+        # Actualizar precios
+        updated = 0
+        for row in items_payload:
+            try:
+                iid = int(row.get("id"))
+            except Exception:
+                continue
+            price = row.get("price_soles", None)
+            try:
+                it = pl.items.get(id=iid)
+            except PurchaseListItem.DoesNotExist:
+                continue
+            if it.unit and it.unit.is_currency:
+                # qty representa el importe; no modifica price_soles
+                pass
+            else:
+                it.price_soles = Decimal(str(price)) if price not in (None, "") else None
+                it.save(update_fields=["price_soles"])
+                updated += 1
+
+        # Finalizar si está completo
+        try:
+            self._ensure_complete_prices(pl)
+        except ValidationError:
+            return Response({"detail": f"Guardado: {updated} precio(s). Aún faltan precios."}, status=200)
+
+        pl.status = "final"
+        pl.finalized_at = timezone.now()
+        if not pl.series_code:
+            from .services.serials import next_series_code
+            pl.series_code = next_series_code(pl.restaurant)
+        pl.save(update_fields=["status", "finalized_at", "series_code"])
+        return Response(
+            {"detail": f"Lista completada y finalizada. ({updated} ítems actualizados)", "id": pl.id, "series_code": pl.series_code},
+            status=200
+        )
+
     # ---------- Acción PDF por lista ----------
     @action(
         detail=True, methods=['get'], url_path='pdf',
         permission_classes=[permissions.AllowAny], authentication_classes=[]
     )
     def pdf(self, request, pk=None):
-        """Genera el PDF de UNA lista (agrupado por categoría)."""
+        """
+        Genera el PDF de UNA lista (agrupado por categoría).
+        Agrega soporte a ?hide_prices=1|true|yes para ocultar la columna Precio (V2 builder).
+        """
         pl = self.get_object()
-        pdf_bytes = self._render_pdf_bytes(request, pl)
+        hide_param = request.query_params.get("hide_prices", "").lower()
+        show_prices = hide_param not in ("1", "true", "yes")
+        pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF en este entorno."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
