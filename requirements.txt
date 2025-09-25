@@ -23,5 +23,4 @@ gunicorn
 whitenoise
 dj-database-url>=2.0
 
-weasyprint
 xhtml2pdf
