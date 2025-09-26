@@ -161,6 +161,34 @@ class PurchaseViewSet(viewsets.ModelViewSet):
         return Response({'detail': 'PDF no implementado aún'}, status=200)
 
 
+# ====================== NUEVOS HELPERS PARA FILTROS ======================
+def _csv_to_list(s: str):
+    return [x.strip() for x in s.split(",") if x and str(x).strip()]
+
+def _collect_multi(request, *keys: str):
+    """
+    Lee valores de múltiples nombres de parámetro.
+    - Soporta ?k=1,2 y ?k=1&k=2
+    - Devuelve lista de strings única (sin vacíos)
+    """
+    out = []
+    for k in keys:
+        out += request.query_params.getlist(k)  # repetidos: ?k=1&k=2
+        val = request.query_params.get(k)       # CSV: ?k=1,2
+        if val:
+            out += _csv_to_list(val)
+    # normalizar
+    dedup = []
+    seen = set()
+    for v in out:
+        s = str(v).strip()
+        if s and s not in seen:
+            seen.add(s)
+            dedup.append(s)
+    return dedup
+# ========================================================================
+
+
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
     """
@@ -440,12 +468,20 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         rows.sort(key=lambda r: r["restaurant_name"] or "")
         return Response(rows, status=200)
 
-    # ---------- Reporte consolidado por rango ----------
-    def _build_range_payload(self, sdate, edate, only_final=True, mode="detail"):
+    # ---------- Reporte consolidado por rango (con filtros opcionales) ----------
+    def _build_range_payload(self, sdate, edate, only_final=True, mode="detail", *, filters=None):
         """
         mode:
           - 'detail': incluye lines (producto, unidad, qty, precio, subtotal)
           - 'summary': omite lines y deja solo totales por categoría/restaurante
+
+        filters (opcional):
+          {
+            "category_ids": [str...],
+            "category_names": [str...],
+            "product_ids": [str...],
+            "product_names": [str...],
+          }
         """
         qs_lists = (PurchaseList.objects
                     .select_related("restaurant")
@@ -458,6 +494,37 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                  .select_related("purchase_list__restaurant", "product__category", "unit")
                  .filter(purchase_list__in=qs_lists))
 
+        # ---- aplicar filtros si llegan ----
+        filters = filters or {}
+        cat_ids   = filters.get("category_ids") or []
+        cat_names = filters.get("category_names") or []
+        prod_ids  = filters.get("product_ids") or []
+        prod_names= filters.get("product_names") or []
+
+        def _to_int_list(xs):
+            out = []
+            for x in xs:
+                try:
+                    out.append(int(x))
+                except Exception:
+                    pass
+            return out
+
+        if cat_ids:
+            ids = _to_int_list(cat_ids)
+            if ids:
+                items = items.filter(product__category_id__in=ids)
+        elif cat_names:
+            items = items.filter(product__category__name__in=cat_names)
+
+        if prod_ids:
+            ids = _to_int_list(prod_ids)
+            if ids:
+                items = items.filter(product_id__in=ids)
+        elif prod_names:
+            items = items.filter(product__name__in=prod_names)
+
+        # ---- resto igual que antes ----
         rest_map = {}
         date_map = defaultdict(lambda: {"lists": set(), "total": Decimal("0.00")})
         grand_total = Decimal("0.00")
@@ -538,6 +605,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         """
         Devuelve JSON del rango (solo del usuario).
         Query: start, end, only_final=true|false, mode=detail|summary (detail por defecto)
+        + filtros opcionales: category_id(s)/category_ids/categories/category_names,
+                              product_id(s)/product_ids/products/product_names
         """
         start = request.query_params.get("start")
         end = request.query_params.get("end")
@@ -556,7 +625,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if sdate > edate:
             sdate, edate = edate, sdate
 
-        payload = self._build_range_payload(sdate, edate, only_final, mode)
+        # --- filtros opcionales ---
+        filters = {
+            "category_ids": _collect_multi(request, "category_id", "category_ids", "categories", "category_ids[]"),
+            "category_names": _collect_multi(request, "category_names", "categories_names", "category", "category[]"),
+            "product_ids": _collect_multi(request, "product_id", "product_ids", "products", "product_ids[]"),
+            "product_names": _collect_multi(request, "product_names", "products_names", "product", "product[]"),
+        }
+
+        payload = self._build_range_payload(sdate, edate, only_final, mode, filters=filters)
         return Response(payload, status=200)
 
     @action(detail=False, methods=['get'], url_path='export/range/pdf')
@@ -564,7 +641,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         """
         PDF del rango (solo del usuario).
         Query: start, end, only_final=true|false, mode=detail|summary
-        - En summary se ocultan las líneas y solo se muestran totales por categoría.
+        + filtros opcionales (mismos alias que export_range)
         """
         start = request.query_params.get("start")
         end = request.query_params.get("end")
@@ -583,9 +660,17 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if sdate > edate:
             sdate, edate = edate, sdate
 
-        payload = self._build_range_payload(sdate, edate, only_final, mode)
+        # --- filtros opcionales ---
+        filters = {
+            "category_ids": _collect_multi(request, "category_id", "category_ids", "categories", "category_ids[]"),
+            "category_names": _collect_multi(request, "category_names", "categories_names", "category", "category[]"),
+            "product_ids": _collect_multi(request, "product_id", "product_ids", "products", "product_ids[]"),
+            "product_names": _collect_multi(request, "product_names", "products_names", "product", "product[]"),
+        }
 
-        # Render plantilla (puedes condicionar bloques según payload["mode"])
+        payload = self._build_range_payload(sdate, edate, only_final, mode, filters=filters)
+
+        # Render plantilla
         html = render_to_string("purchase_report.html", payload)
 
         pdf_bytes = None
@@ -606,6 +691,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF del reporte."}, status=500)
 
+        # Forzar descarga directa (attachment)
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'inline; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
+        resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
