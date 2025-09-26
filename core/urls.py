@@ -21,7 +21,8 @@ router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list'
 urlpatterns = [
     # Auth
     path('auth/login/', obtain_auth_token, name='api_token_auth'),
-    path('auth/change-password/', ChangePasswordView.as_view(), name='change_password'),
+    path('auth/change-password/', ChangePasswordView.as_view(), 
+    path("api/public/config/", PublicConfigAPIView.as_view(), name="public-config"),name='change_password'),
 
     # Config (autenticada, filtrada por usuario)
     path('public/config/', PublicConfigView.as_view(), name='public_config'),

@@ -9,7 +9,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from datetime import date as date_cls
 from collections import defaultdict
@@ -83,7 +83,8 @@ class PublicConfigView(APIView):
     Devuelve el catálogo del usuario autenticado.
     (Si quieres mantener una versión pública, crea otra vista separada.)
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [AllowAny]
+    authentication_classes = []
 
     def get(self, request):
         user = request.user
