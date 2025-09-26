@@ -3,6 +3,8 @@ from django.utils import timezone
 from django.template.loader import render_to_string
 from django.http import HttpResponse
 
+from django.db.models import Sum, F
+
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -21,7 +23,7 @@ from .models import (
 from .serializers import (
     CategorySerializer, ProductSerializer, RestaurantSerializer, PurchaseSerializer,
     PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer,
-    ChangePasswordSerializer,   # <-- importante
+    ChangePasswordSerializer,
 )
 
 # ---------------- Cambio de contraseña ----------------
@@ -419,7 +421,12 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return Response(rows, status=200)
 
     # ---------- Reporte consolidado por rango ----------
-    def _build_range_payload(self, sdate, edate, only_final=True):
+    def _build_range_payload(self, sdate, edate, only_final=True, mode="detail"):
+        """
+        mode:
+          - 'detail': incluye lines (producto, unidad, qty, precio, subtotal)
+          - 'summary': omite lines y deja solo totales por categoría/restaurante
+        """
         qs_lists = (PurchaseList.objects
                     .select_related("restaurant")
                     .filter(created_by=self.request.user,
@@ -448,16 +455,19 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             r = rest_map.setdefault(rest, {"categories": {}, "total": Decimal("0.00")})
-            c = r["categories"].setdefault(cat, {"lines": [], "total": Decimal("0.00")})
-            c["lines"].append({
-                "date": it.purchase_list.created_at.date().isoformat(),
-                "product": it.product.name,
-                "unit": ulabel,
-                "qty": float(qty),
-                "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                "subtotal": float(subtotal),
-                "unit_is_currency": is_curr,
-            })
+            c = r["categories"].setdefault(cat, {"lines": [] if mode == "detail" else None, "total": Decimal("0.00")})
+
+            if mode == "detail":
+                c["lines"].append({
+                    "date": it.purchase_list.created_at.date().isoformat(),
+                    "product": it.product.name,
+                    "unit": ulabel,
+                    "qty": float(qty),
+                    "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                    "subtotal": float(subtotal),
+                    "unit_is_currency": is_curr,
+                })
+
             c["total"] = (c["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             r["total"] = (r["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             grand_total = (grand_total + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -471,11 +481,14 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             cat_list = []
             for cname in sorted(rest_map[rname]["categories"].keys()):
                 cdata = rest_map[rname]["categories"][cname]
-                cat_list.append({
+                entry = {
                     "category": cname,
                     "total": float(Decimal(cdata["total"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                    "lines": cdata["lines"],
-                })
+                }
+                if mode == "detail":
+                    entry["lines"] = cdata["lines"]
+                cat_list.append(entry)
+
             restaurants.append({
                 "restaurant": rname,
                 "total": float(Decimal(rest_map[rname]["total"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
@@ -491,6 +504,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             })
 
         return {
+            "mode": mode,
             "start": sdate.isoformat(),
             "end": edate.isoformat(),
             "only_final": only_final,
@@ -501,10 +515,16 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='export/range')
     def export_range(self, request):
-        """Devuelve JSON del rango con totales en 2 decimales (solo del usuario)."""
+        """
+        Devuelve JSON del rango (solo del usuario).
+        Query: start, end, only_final=true|false, mode=detail|summary (detail por defecto)
+        """
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"
+        mode = request.query_params.get("mode", "detail").lower()
+        if mode not in ("detail", "summary"):
+            mode = "detail"
 
         if not start or not end:
             return Response({"detail": "Parámetros 'start' y 'end' son requeridos (YYYY-MM-DD)."}, status=400)
@@ -516,15 +536,22 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if sdate > edate:
             sdate, edate = edate, sdate
 
-        payload = self._build_range_payload(sdate, edate, only_final)
+        payload = self._build_range_payload(sdate, edate, only_final, mode)
         return Response(payload, status=200)
 
     @action(detail=False, methods=['get'], url_path='export/range/pdf')
     def export_range_pdf(self, request):
-        """PDF del rango (solo del usuario). Query: start, end, only_final"""
+        """
+        PDF del rango (solo del usuario).
+        Query: start, end, only_final=true|false, mode=detail|summary
+        - En summary se ocultan las líneas y solo se muestran totales por categoría.
+        """
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"
+        mode = request.query_params.get("mode", "detail").lower()
+        if mode not in ("detail", "summary"):
+            mode = "detail"
 
         if not start or not end:
             return Response({"detail": "Parámetros 'start' y 'end' son requeridos (YYYY-MM-DD)."}, status=400)
@@ -536,9 +563,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if sdate > edate:
             sdate, edate = edate, sdate
 
-        payload = self._build_range_payload(sdate, edate, only_final)
+        payload = self._build_range_payload(sdate, edate, only_final, mode)
 
-        # Render plantilla
+        # Render plantilla (puedes condicionar bloques según payload["mode"])
         html = render_to_string("purchase_report.html", payload)
 
         pdf_bytes = None
