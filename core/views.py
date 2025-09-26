@@ -78,13 +78,13 @@ class DefaultPerm(permissions.IsAuthenticated):
 
 
 # --------------- Config (autenticado y por usuario) ---------------
-class PublicConfigView(APIView):
+# --------------- Config ---------------
+
+class AuthConfigView(APIView):
     """
-    Devuelve el catálogo del usuario autenticado.
-    (Si quieres mantener una versión pública, crea otra vista separada.)
+    Config/ catálogo del usuario autenticado.
     """
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
@@ -100,6 +100,25 @@ class PublicConfigView(APIView):
             "units":       UnitSerializer(units, many=True).data,
         })
 
+
+class PublicConfigAPIView(APIView):
+    """
+    Config pública (sin autenticación) usada por el módulo de reportes/PDF.
+    NO devuelve datos de usuario, sólo endpoints/base flags.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, *args, **kwargs):
+        return Response({
+            "app": "control-compras",
+            "version": "v2.x",
+            "pdf": {
+                # JSON y PDF que tu frontend usa (con slash final)
+                "export_range_json": "/api/purchase-lists/export/range/",
+                "export_range_pdf": "/api/purchase-lists/export/range/pdf/"
+            }
+        }, status=200)
 
 # --------- Catálogo (aislado por usuario) ----------
 class CategoryViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):

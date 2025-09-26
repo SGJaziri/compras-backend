@@ -5,11 +5,13 @@ from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (
     ChangePasswordView,
-    PublicConfigView,
+    AuthConfigView,
+    PublicConfigAPIView,
     CategoryViewSet, ProductViewSet, RestaurantViewSet, UnitViewSet,
     PurchaseViewSet, PurchaseListViewSet,
 )
 
+# DRF Router (CRUDs)
 router = DefaultRouter()
 router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'products', ProductViewSet, basename='product')
@@ -19,13 +21,16 @@ router.register(r'purchases', PurchaseViewSet, basename='purchase')
 router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list')
 
 urlpatterns = [
-    # Auth
+    # --- Auth ---
     path('auth/login/', obtain_auth_token, name='api_token_auth'),
-    path('auth/change-password/', ChangePasswordView.as_view(), 
-    path("api/public/config/", PublicConfigAPIView.as_view(), name="public-config"),name='change_password'),
+    path('auth/change-password/', ChangePasswordView.as_view(), name='change_password'),
 
-    # Config (autenticada, filtrada por usuario)
-    path('public/config/', PublicConfigView.as_view(), name='public_config'),
+    # --- Config autenticada (catálogo del usuario) ---
+    path('config/', AuthConfigView.as_view(), name='auth_config'),
+
+    # --- Config pública (sin autenticación) ---
+    # Quedará como /api/public/config/ cuando incluyas core.urls bajo el prefijo /api/
+    path('public/config/', PublicConfigAPIView.as_view(), name='public_config'),
 ]
 
 # Endpoints del router (CRUDs)
