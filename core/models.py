@@ -7,6 +7,9 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
+from django.contrib.auth import get_user_model
+User = get_user_model()
+
 # -----------------------------------
 # Catálogo de Unidades
 # -----------------------------------
@@ -20,7 +23,7 @@ class Unit(models.Model):
     )
 
     # Ej.: 'Kilogramo', 'Unidad', 'Soles'
-    name = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=40)
     kind = models.CharField(max_length=20, choices=KIND_CHOICES, default="other")
     # Ej.: 'kg', 'uni', 'S/'
     symbol = models.CharField(max_length=10, blank=True, null=True)
@@ -28,8 +31,15 @@ class Unit(models.Model):
     is_currency = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='units', null=True, blank=True)
+
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "name"], name="uniq_unit_name_per_owner"
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -39,26 +49,43 @@ class Unit(models.Model):
 # Catálogo
 # -----------------------------------
 class Category(models.Model):
-    name = models.CharField(max_length=80, unique=True)
+    name = models.CharField(max_length=80)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='categories', null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "name"], name="uniq_category_name_per_owner"
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name
 
 
 class Restaurant(models.Model):
-    name = models.CharField(max_length=120, unique=True)
+    name = models.CharField(max_length=120)
     address = models.CharField(max_length=200, blank=True, null=True)
     contact = models.CharField(max_length=120, blank=True, null=True)
     # Código corto, ej.: 'ALP', 'MIL'
-    code = models.CharField(max_length=3, unique=True)
+    code = models.CharField(max_length=3)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='restaurants', null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "name"], name="uniq_restaurant_name_per_owner"
+            ),
+            models.UniqueConstraint(
+                fields=["owner", "code"], name="uniq_restaurant_code_per_owner"
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         # Normalizamos a 3 letras mayúsculas
@@ -83,16 +110,27 @@ class Product(models.Model):
     allowed_units = models.ManyToManyField(Unit, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='products', null=True, blank=True)
+
     class Meta:
+        ordering = ["name"]
         constraints = [
+            # Unicidad por usuario (nombre+categoría). La categoría ya está scoping por owner.
             models.UniqueConstraint(
-                fields=["name", "category"], name="uniq_product_name_per_category"
+                fields=["owner", "name", "category"], name="uniq_product_name_cat_per_owner"
             ),
         ]
-        ordering = ["name"]
+
+    def clean(self):
+        # Coherencia de owner entre product/category/default_unit
+        if self.category and self.owner and getattr(self.category, "owner_id", None) != self.owner_id:
+            raise ValidationError("La categoría no pertenece al mismo usuario del producto.")
+        if self.default_unit and self.owner and getattr(self.default_unit, "owner_id", None) != self.owner_id:
+            raise ValidationError("La unidad por defecto no pertenece al mismo usuario del producto.")
 
     def __str__(self) -> str:
-        return f"{self.name} / {self.category.name}"
+        cat = getattr(self.category, "name", "?")
+        return f"{self.name} / {cat}"
 
 
 # -----------------------------------
@@ -142,7 +180,7 @@ class PurchaseItem(models.Model):
 
 
 # -----------------------------------
-# Listas de compra (flujo público)
+# Listas de compra
 # -----------------------------------
 class PurchaseList(models.Model):
     STATUS = (("draft", "Draft"), ("final", "Final"))
@@ -177,7 +215,6 @@ class PurchaseListItem(models.Model):
     # Regla: si la unidad es moneda, qty es el **importe**; en otro caso, qty es la cantidad
     qty = models.DecimalField(max_digits=12, decimal_places=2)
     price_soles = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    unit = models.ForeignKey('Unit', on_delete=models.PROTECT)
 
     class Meta:
         indexes = [
@@ -185,9 +222,9 @@ class PurchaseListItem(models.Model):
         ]
 
     def clean(self):
-    # Validaciones coherentes según tipo de unidad
+        # Validaciones coherentes según tipo de unidad
         if self.unit and self.unit.is_currency:
-            # Moneda: qty = importe; price_soles no debe venir
+            # Moneda: qty = importe; price_soles no debe venir (>0 tampoco)
             if self.price_soles not in (None, Decimal("0"), Decimal("0.00")):
                 raise ValidationError(
                     "Para unidad monetaria, no debe enviarse price_soles (use solo qty como importe)."

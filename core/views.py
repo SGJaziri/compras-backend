@@ -7,6 +7,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
 
 from datetime import date as date_cls
 from collections import defaultdict
@@ -19,19 +20,53 @@ from .models import (
 )
 from .serializers import (
     CategorySerializer, ProductSerializer, RestaurantSerializer, PurchaseSerializer,
-    PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer
+    PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer,
+    ChangePasswordSerializer,   # <-- importante
 )
 
-# --- (opcional) Mixin de lectura pública
-class PublicReadMixin:
-    authentication_classes = []  # sin SessionAuth/CSRF para GETs del frontend
-    permission_classes = [permissions.IsAuthenticated]
-    public_actions = {"list", "retrieve"}
+# ---------------- Cambio de contraseña ----------------
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
 
-    def get_permissions(self):
-        if getattr(self, "action", None) in self.public_actions:
-            return [permissions.AllowAny()]
-        return super().get_permissions()
+    def post(self, request):
+        ser = ChangePasswordSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        user = request.user
+        if not user.check_password(ser.validated_data['current_password']):
+            return Response({"detail": "Contraseña actual incorrecta."}, status=400)
+        user.set_password(ser.validated_data['new_password'])
+        user.save()
+        return Response({"detail": "Contraseña actualizada correctamente."}, status=200)
+
+
+# ---------------- Scoped mixin (aislar por usuario) ----------------
+class OwnedQuerysetMixin:
+    """Filtra por owner/created_by = request.user."""
+    owner_field = 'owner'  # override donde sea necesario
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return qs.none()
+        # Si el modelo tiene 'owner', filtra por ahí
+        if hasattr(self.Meta, "model") and hasattr(self.Meta.model, self.owner_field):
+            return qs.filter(**{self.owner_field: user})
+        # Si no, probar con 'created_by'
+        if hasattr(self.Meta, "model") and hasattr(self.Meta.model, 'created_by'):
+            return qs.filter(created_by=user)
+        return qs.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        extra = {}
+        if hasattr(self.Meta, "model"):
+            field_names = [f.name for f in self.Meta.model._meta.fields]
+            if 'owner' in field_names:
+                extra['owner'] = user
+            if 'created_by' in field_names:
+                extra['created_by'] = user
+        serializer.save(**extra)
 
 
 # ---------------- Permisos base ----------------
@@ -40,52 +75,57 @@ class DefaultPerm(permissions.IsAuthenticated):
     pass
 
 
-# --------------- Público: config mínima ---------------
+# --------------- Config (autenticado y por usuario) ---------------
 class PublicConfigView(APIView):
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []  # sin CSRF para público
+    """
+    Devuelve el catálogo del usuario autenticado.
+    (Si quieres mantener una versión pública, crea otra vista separada.)
+    """
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        restaurants = Restaurant.objects.all().order_by("name")
-        categories = Category.objects.all().order_by("name")
-        products = Product.objects.select_related("category").all().order_by("name")
-        units = Unit.objects.all().order_by("name")
+        user = request.user
+        restaurants = Restaurant.objects.filter(owner=user).order_by("name")
+        categories  = Category.objects.filter(owner=user).order_by("name")
+        products    = Product.objects.select_related("category").filter(owner=user).order_by("name")
+        units       = Unit.objects.filter(owner=user).order_by("name")
 
         return Response({
             "restaurants": RestaurantSerializer(restaurants, many=True).data,
-            "categories": CategorySerializer(categories, many=True).data,
-            "products": ProductSerializer(products, many=True).data,
-            "units": UnitSerializer(units, many=True).data,
+            "categories":  CategorySerializer(categories, many=True).data,
+            "products":    ProductSerializer(products, many=True).data,
+            "units":       UnitSerializer(units, many=True).data,
         })
 
 
-# --------- Catálogo (todo público) ----------
-class CategoryViewSet(viewsets.ModelViewSet):
+# --------- Catálogo (aislado por usuario) ----------
+class CategoryViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by("name")
     serializer_class = CategorySerializer
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
+    class Meta:
+        model = Category
 
-
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Product.objects.select_related("category").all().order_by("name")
     serializer_class = ProductSerializer
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
+    class Meta:
+        model = Product
 
-
-class UnitViewSet(viewsets.ModelViewSet):
+class UnitViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Unit.objects.all().order_by("name")
     serializer_class = UnitSerializer
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
+    class Meta:
+        model = Unit
 
-
-class RestaurantViewSet(viewsets.ModelViewSet):
+class RestaurantViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Restaurant.objects.all().order_by("name")
     serializer_class = RestaurantSerializer
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
+    class Meta:
+        model = Restaurant
 
 
 # --------------- Compras formales (futuro) ---------------
@@ -99,23 +139,24 @@ class PurchaseViewSet(viewsets.ModelViewSet):
         return Response({'detail': 'PDF no implementado aún'}, status=200)
 
 
-# --------------- Listas (flujo público) ---------------
+# --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
-    queryset = PurchaseList.objects.prefetch_related('items', 'restaurant').all()
+    """
+    Requiere autenticación.
+    El queryset siempre se filtra por created_by=request.user.
+    """
     serializer_class = PurchaseListSerializer
-
-    # Desactivar SessionAuth/CSRF en todo el ViewSet para el flujo público.
-    authentication_classes = []
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_permissions(self):
-        public_actions = [
-            'list', 'retrieve', 'create', 'add_item', 'finalize', 'complete',
-            'pdf', 'export_by_date', 'export_range', 'export_range_pdf'
-        ]
-        if self.action in public_actions:
-            return [permissions.AllowAny()]
-        return super().get_permissions()
+    def get_queryset(self):
+        user = self.request.user
+        return (PurchaseList.objects
+                .filter(created_by=user)
+                .prefetch_related('items__product__category', 'items__unit', 'restaurant')
+                .order_by('-id'))
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     # ---------- Helpers internos (NO @action) ----------
     def _ensure_complete_prices(self, pl: PurchaseList):
@@ -152,7 +193,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 "product": it.product.name,
                 "unit": ulabel,
                 "qty": float(qty),
-                # si es moneda, no hay price; y si hide_prices está activo, tampoco
                 "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
                          else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
@@ -176,7 +216,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
             "lines": flat_lines,
             "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-            # flags y observación para la plantilla
             "show_prices": show_prices,
             "observation": (pl.observation or ""),
         }
@@ -203,10 +242,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return None
 
     # ---------- Acciones ----------
-    @action(
-        detail=True, methods=['post'], url_path='finalize',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
+    @action(detail=True, methods=['post'], url_path='finalize')
     def finalize(self, request, pk=None):
         """Finaliza una lista solo si todos los ítems no monetarios tienen precio."""
         pl = self.get_object()
@@ -220,7 +256,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.status = "final"
         pl.finalized_at = timezone.now()
         if not pl.series_code:
-            # Fallback robusto para generar la serie
             try:
                 from .services.serials import next_series_code
                 pl.series_code = next_series_code(pl.restaurant)
@@ -234,12 +269,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
-    @action(
-        detail=True, methods=['post'], url_path='items',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
+    @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
-        """Agregar ítem a la lista (builder público)."""
+        """Agregar ítem a la lista (builder)."""
         pl = self.get_object()
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
@@ -261,19 +293,11 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
         return Response(PurchaseListItemSerializer(obj).data, status=201)
 
-    @action(
-        detail=True, methods=['post'], url_path='complete',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
+    @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):
         """
         Completa una lista en borrador: actualiza precios de ítems y guarda una observación.
         Si después de actualizar todo queda completo, finaliza automáticamente.
-        Payload:
-        {
-            "items": [{ "id": <item_id>, "price_soles": <number|null> }, ...],
-            "observation": "<texto opcional>"
-        }
         """
         pl = self.get_object()
         if pl.status == "final":
@@ -316,7 +340,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.status = "final"
         pl.finalized_at = timezone.now()
         if not pl.series_code:
-            # Fallback robusto para generar la serie
             try:
                 from .services.serials import next_series_code
                 pl.series_code = next_series_code(pl.restaurant)
@@ -334,17 +357,10 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             status=200
         )
 
-    # ---------- Acción PDF por lista ----------
-    @action(
-        detail=True, methods=['get'], url_path='pdf',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
+    # ---------- PDF por lista ----------
+    @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
-        """
-        Genera el PDF de UNA lista (agrupado por categoría).
-        Agrega soporte a ?hide_prices=1|true|yes para ocultar la columna Precio (V2 builder).
-        """
-        pl = self.get_object()
+        pl = self.get_object()  # scoped al user
         hide_param = request.query_params.get("hide_prices", "").lower()
         show_prices = hide_param not in ("1", "true", "yes")
         pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
@@ -356,18 +372,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return resp
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
-    @action(
-        detail=False, methods=['get'], url_path='export/by-date',
-        permission_classes=[permissions.AllowAny], authentication_classes=[]
-    )
+    @action(detail=False, methods=['get'], url_path='export/by-date')
     def export_by_date(self, request):
-        """
-        Devuelve JSON con 1 entrada por restaurante para la fecha indicada.
-        Cada entrada incluye el URL directo del PDF de su lista más reciente ese día.
-        Query params:
-          - date=YYYY-MM-DD  (opcional; por defecto hoy)
-          - only_final=true|false (opcional; default true)
-        """
         try:
             date_str = request.query_params.get("date")
             if date_str:
@@ -382,7 +388,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         qs = (PurchaseList.objects
               .select_related("restaurant")
               .prefetch_related("items__product__category", "items__unit")
-              .filter(created_at__date=d))
+              .filter(created_by=request.user, created_at__date=d))
         if only_final:
             qs = qs.filter(status="final")
 
@@ -414,13 +420,10 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     # ---------- Reporte consolidado por rango ----------
     def _build_range_payload(self, sdate, edate, only_final=True):
-        """
-        Arma el payload del reporte por rango: restaurants[], grand_total y dates[].
-        Calcula con Decimal y redondea a 2 decimales.
-        """
         qs_lists = (PurchaseList.objects
                     .select_related("restaurant")
-                    .filter(created_at__date__gte=sdate, created_at__date__lte=edate))
+                    .filter(created_by=self.request.user,
+                            created_at__date__gte=sdate, created_at__date__lte=edate))
         if only_final:
             qs_lists = qs_lists.filter(status="final")
 
@@ -428,7 +431,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                  .select_related("purchase_list__restaurant", "product__category", "unit")
                  .filter(purchase_list__in=qs_lists))
 
-        rest_map = {}    # {rest: {"categories": {cat: {"lines":[...], "total":Decimal}}, "total":Decimal}}
+        rest_map = {}
         date_map = defaultdict(lambda: {"lists": set(), "total": Decimal("0.00")})
         grand_total = Decimal("0.00")
 
@@ -496,10 +499,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             "dates": date_breakdown,
         }
 
-    @action(detail=False, methods=['get'], url_path='export/range',
-            permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=False, methods=['get'], url_path='export/range')
     def export_range(self, request):
-        """Devuelve JSON del rango con totales en 2 decimales."""
+        """Devuelve JSON del rango con totales en 2 decimales (solo del usuario)."""
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"
@@ -517,13 +519,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         payload = self._build_range_payload(sdate, edate, only_final)
         return Response(payload, status=200)
 
-    @action(detail=False, methods=['get'], url_path='export/range/pdf',
-            permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=False, methods=['get'], url_path='export/range/pdf')
     def export_range_pdf(self, request):
-        """
-        PDF del rango (ruta directa con /pdf/).
-        Query: start, end, only_final
-        """
+        """PDF del rango (solo del usuario). Query: start, end, only_final"""
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"

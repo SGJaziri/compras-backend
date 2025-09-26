@@ -1,8 +1,10 @@
 # core/urls.py
 from django.urls import path
 from rest_framework.routers import DefaultRouter
+from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (
+    ChangePasswordView,
     PublicConfigView,
     CategoryViewSet, ProductViewSet, RestaurantViewSet, UnitViewSet,
     PurchaseViewSet, PurchaseListViewSet,
@@ -17,7 +19,13 @@ router.register(r'purchases', PurchaseViewSet, basename='purchase')
 router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list')
 
 urlpatterns = [
-    path('public/config/', PublicConfigView.as_view(), name='public-config'),
+    # Auth
+    path('auth/login/', obtain_auth_token, name='api_token_auth'),
+    path('auth/change-password/', ChangePasswordView.as_view(), name='change_password'),
+
+    # Config (autenticada, filtrada por usuario)
+    path('public/config/', PublicConfigView.as_view(), name='public_config'),
 ]
 
+# Endpoints del router (CRUDs)
 urlpatterns += router.urls
