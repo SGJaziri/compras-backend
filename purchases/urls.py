@@ -3,9 +3,18 @@ from django.contrib import admin
 from django.urls import path, include, re_path
 from django.views.generic import RedirectView
 
+from rest_framework_nested import routers
+
+router = routers.DefaultRouter()
+router.register("purchase-lists", PurchaseListViewSet, basename="purchase-list")
+
+nested = routers.NestedDefaultRouter(router, "purchase-lists", lookup="purchase_list")
+nested.register("items", PurchaseListItemViewSet, basename="purchase-list-items")
+
 urlpatterns = [
+    path("api/", include(router.urls)),
+    path("api/", include(nested.urls)),
     path('admin/', admin.site.urls),
-    path('api/', include('core.urls')),  # único include al core
 ]
 
 # (Opcional) redirecciones sin barra final
