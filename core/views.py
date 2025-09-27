@@ -12,9 +12,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from rest_framework.viewsets import ModelViewSet
-from django.shortcuts import get_object_or_404
-
 from datetime import date as date_cls
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
@@ -29,19 +26,6 @@ from .serializers import (
     PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer,
     ChangePasswordSerializer,
 )
-
-class PurchaseListItemViewSet(ModelViewSet):
-    serializer_class = PurchaseListItemSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return PurchaseListItem.objects.filter(
-            purchase_list_id=self.kwargs["purchase_list_pk"]
-        )
-
-    def perform_create(self, serializer):
-        pl = get_object_or_404(PurchaseList, pk=self.kwargs["purchase_list_pk"])
-        serializer.save(purchase_list=pl)
 
 # ---------------- Cambio de contraseña ----------------
 class ChangePasswordView(APIView):

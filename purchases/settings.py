@@ -22,7 +22,7 @@ DATABASES = {
     "default": dj_database_url.config(
         default=os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'db.sqlite3'}"),
         conn_max_age=600,
-        ssl_require=(os.getenv("DB_SSL_REQUIRE", "False") == "True"),
+        ssl_require=bool(os.getenv("DB_SSL_REQUIRE", "False") == "True"),
     )
 }
 
@@ -32,22 +32,6 @@ CORS_ALLOWED_ORIGINS = _csv_env("CORS_ALLOWED_ORIGINS", "")  # http(s)://dominio
 CORS_ALLOWED_ORIGIN_REGEXES = _csv_env("CORS_ALLOWED_ORIGIN_REGEXES", "")  # regex para previews
 CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS", "")  # http(s)://dominio.tld
 CORS_ALLOW_CREDENTIALS = True
-
-# Permitir OPTIONS / headers típicos de fetch + Authorization
-CORS_ALLOW_METHODS = [
-    "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS",
-]
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
-]
 
 # En desarrollo, si no configuraste dominios, permite todo (solo DEBUG)
 if DEBUG and not (CORS_ALLOWED_ORIGINS or CORS_ALLOWED_ORIGIN_REGEXES):
@@ -110,10 +94,7 @@ WSGI_APPLICATION = "purchases.wsgi.application"
 # --- DRF ---
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        # Mantén compatibilidad: primero Token (V1), también JWT (posible V2)
         "rest_framework.authentication.TokenAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -134,14 +115,15 @@ else:
         "rest_framework.renderers.BrowsableAPIRenderer",
     ]
 
-# (Opcional) JWT si más adelante lo usas / ya lo usas en algunas rutas
+# (Opcional) JWT si más adelante lo usas
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.getenv("JWT_ACCESS_TTL_MIN", "60"))),
-    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=int(os.getenv("JWT_REFRESH_TTL_MIN", "43200"))),  # 30 días
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.getenv("JWT_ACCESS_TTL_MIN", "60"))
+    ),
+    "REFRESH_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.getenv("JWT_REFRESH_TTL_MIN", "43200"))  # 30 días
+    ),
 }
-
-# --- Trailing slash: evita 301/405 raros cuando el front omite/agrega '/' ---
-APPEND_SLASH = True
 
 # --- Password validation ---
 AUTH_PASSWORD_VALIDATORS = [
@@ -166,22 +148,16 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Cookies y redirecciones seguras
 if DEBUG:
     CSRF_COOKIE_SECURE = False
     SESSION_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False
     SECURE_PROXY_SSL_HEADER = None
-    CSRF_COOKIE_SAMESITE = "Lax"
-    SESSION_COOKIE_SAMESITE = "Lax"
 else:
     CSRF_COOKIE_SECURE = True
     SESSION_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = True
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    # Para permitir cookies en contextos cross-site (si usas sesión/cookies desde otro dominio)
-    CSRF_COOKIE_SAMESITE = "None"
-    SESSION_COOKIE_SAMESITE = "None"
     # Activa HSTS si tu dominio ya sirve 100% en HTTPS
     # SECURE_HSTS_SECONDS = 31536000
     # SECURE_HSTS_INCLUDE_SUBDOMAINS = True

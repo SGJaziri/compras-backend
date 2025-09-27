@@ -131,8 +131,6 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     - Si unit.is_currency=True: qty es importe y price_soles se fuerza a None.
     - Si NO es monetaria: en borrador price_soles puede ser None, en final es requerido.
     """
-    purchase_list = serializers.PrimaryKeyRelatedField(read_only=True)
-
     # Campos de ayuda para el frontend (solo lectura)
     product_name = serializers.SerializerMethodField(read_only=True)
     unit_name = serializers.SerializerMethodField(read_only=True)
