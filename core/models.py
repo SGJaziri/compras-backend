@@ -104,7 +104,7 @@ class Product(models.Model):
     )
     ref_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     default_unit = models.ForeignKey(
-        Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+        Unit, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
     # Menú de unidades permitidas para este producto (opcional)
     allowed_units = models.ManyToManyField(Unit, blank=True)

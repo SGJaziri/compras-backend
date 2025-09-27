@@ -3,7 +3,7 @@ from django.utils import timezone
 from django.template.loader import render_to_string
 from django.http import HttpResponse
 
-from django.db.models import Sum, F
+from django.db.models.deletion import ProtectedError
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -135,12 +135,23 @@ class ProductViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     class Meta:
         model = Product
 
-class UnitViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
+
+class UnitViewSet(viewsets.ModelViewSet):
     queryset = Unit.objects.all().order_by("name")
     serializer_class = UnitSerializer
-    permission_classes = [IsAuthenticated]
-    class Meta:
-        model = Unit
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except ProtectedError:
+            # Contar cuántos productos la usan
+            cnt = instance.products.count()
+            return Response(
+                {"detail": f"No se puede eliminar. {cnt} producto(s) usan esta unidad."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
 class RestaurantViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Restaurant.objects.all().order_by("name")
