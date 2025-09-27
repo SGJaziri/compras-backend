@@ -4,6 +4,7 @@ from django.template.loader import render_to_string
 from django.http import HttpResponse
 
 from django.db.models.deletion import ProtectedError
+from django.db import IntegrityError
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -146,12 +147,25 @@ class UnitViewSet(viewsets.ModelViewSet):
             self.perform_destroy(instance)
             return Response(status=status.HTTP_204_NO_CONTENT)
         except ProtectedError:
-            # Contar cuántos productos la usan
-            cnt = instance.products.count()
-            return Response(
-                {"detail": f"No se puede eliminar. {cnt} producto(s) usan esta unidad."},
-                status=status.HTTP_409_CONFLICT,
+            # Cuenta usos típicos de Unit
+            count_products = Product.objects.filter(default_unit=instance).count()
+            count_list_items = PurchaseListItem.objects.filter(unit=instance).count()
+            total = count_products + count_list_items
+            detail = (
+                f"No se puede eliminar. La unidad está en uso por {total} registro(s)"
+                f"{' (productos: ' + str(count_products) + ')' if count_products else ''}."
             )
+            return Response({"detail": detail}, status=status.HTTP_409_CONFLICT)
+        except IntegrityError:
+            # Si el FK quedó con NO ACTION en la BD, cae aquí
+            count_products = Product.objects.filter(default_unit=instance).count()
+            count_list_items = PurchaseListItem.objects.filter(unit=instance).count()
+            total = count_products + count_list_items
+            detail = (
+                f"No se puede eliminar por integridad referencial. En uso por {total} registro(s)"
+                f"{' (productos: ' + str(count_products) + ')' if count_products else ''}."
+            )
+            return Response({"detail": detail}, status=status.HTTP_409_CONFLICT)
 
 class RestaurantViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Restaurant.objects.all().order_by("name")
