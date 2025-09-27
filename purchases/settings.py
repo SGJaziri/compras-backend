@@ -113,6 +113,7 @@ REST_FRAMEWORK = {
         # Mantén compatibilidad: primero Token (V1), también JWT (posible V2)
         "rest_framework.authentication.TokenAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
