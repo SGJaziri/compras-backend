@@ -96,7 +96,6 @@ class Restaurant(models.Model):
     def __str__(self) -> str:
         return f"{self.name} ({self.code})"
 
-
 class Product(models.Model):
     name = models.CharField(max_length=120)
     category = models.ForeignKey(
