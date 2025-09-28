@@ -213,6 +213,29 @@ def _collect_multi(request, *keys: str):
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
+
+    def create(self, request, *args, **kwargs):
+        """Crea lista; si hay una lista *draft* vacía reciente para el mismo restaurante, la reutiliza."""
+        user = request.user
+        rest_id = request.data.get("restaurant")
+        try:
+            rest_id_int = int(rest_id)
+        except Exception:
+            rest_id_int = None
+        if rest_id_int:
+            from django.utils import timezone
+            from datetime import timedelta
+            now = timezone.now()
+            qs = (PurchaseList.objects
+                  .filter(created_by=user, restaurant_id=rest_id_int, status='draft')
+                  .order_by('-id'))
+            for existing in qs[:5]:
+                # sin items y creada hace <= 2 minutos
+                if existing.items.count() == 0 and (now - existing.created_at) <= timedelta(minutes=2):
+                    ser = self.get_serializer(existing)
+                    return Response(ser.data, status=200)
+        return super().create(request, *args, **kwargs)
+
     """
     Requiere autenticación.
     El queryset siempre se filtra por created_by=request.user.
@@ -242,60 +265,79 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             msg = "Faltan precios en: " + ", ".join(missing[:10])
             raise ValidationError(msg if len(missing) <= 10 else msg + f" y {len(missing)-10} más")
 
-    def _render_pdf_html(self, request, pl: PurchaseList, show_prices: bool = True):
+    def _render_pdf_html(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
         """Construye el HTML del PDF agrupando por categoría con decimales correctos."""
         items_qs = pl.items.select_related("product__category", "unit").all()
 
-        groups_map = {}   # {category_name: [line, ...]}
-        grand_total = Decimal("0.00")
+        # Filtrar por categorías si se enviaron
+        if category_ids:
+            try:
+                ids = [int(x) for x in category_ids if str(x).strip().isdigit()]
+            except Exception:
+                ids = []
+            if ids:
+                items_qs = items_qs.filter(product__category_id__in=ids)
+        if category_names:
+            names = [str(x).strip() for x in category_names if str(x).strip()]
+            if names:
+                items_qs = items_qs.filter(product__category__name__in=names)
 
-        for it in items_qs:
-            cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
+                groups_map = {}   # {category_name: [line, ...]}
+                grand_total = Decimal("0.00")
 
-            price = (it.price_soles or Decimal("0"))
-            qty   = (it.qty or Decimal("0"))
-            raw_subtotal = qty if (getattr(it.unit, "is_currency", False)) else (qty * price)
-            subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                for it in items_qs:
+                    cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
 
-            grand_total += subtotal
+                    price = (it.price_soles or Decimal("0"))
+                    qty   = (it.qty or Decimal("0"))
+                    raw_subtotal = qty if (getattr(it.unit, "is_currency", False)) else (qty * price)
+                    subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
+                    grand_total += subtotal
 
-            line = {
-                "product": it.product.name,
-                "unit": ulabel,
-                "qty": float(qty),
-                "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
-                         else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                "subtotal": float(subtotal),
-                "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
-            }
-            groups_map.setdefault(cat, []).append(line)
+                    ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
 
-        # Normalizar a lista ordenada
-        groups = []
-        flat_lines = []
-        for cat_name in sorted(groups_map.keys(), key=lambda s: (s is None, s)):
-            lines = groups_map[cat_name]
-            flat_lines.extend(lines)
-            group_total_dec = sum(Decimal(str(l["subtotal"])) for l in lines)
-            group_total = float(group_total_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-            groups.append({"category": cat_name, "lines": lines, "group_total": group_total})
+                    line = {
+                        "product": it.product.name,
+                        "unit": ulabel,
+                        "qty": float(qty),
+                        "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
+                                else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                        "subtotal": float(subtotal),
+                        "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
+                    }
+                    groups_map.setdefault(cat, []).append(line)
 
-        ctx = {
-            "pl": pl,
-            "groups": groups,
-            "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-            "lines": flat_lines,
-            "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-            "show_prices": show_prices,
-            "observation": (pl.observation or ""),
-        }
-        html = render_to_string("purchase_list.html", ctx)
-        return html
+                # Normalizar a lista ordenada
+                groups = []
+                flat_lines = []
+                for cat_name in sorted(groups_map.keys(), key=lambda s: (s is None, s)):
+                    lines = groups_map[cat_name]
+                    flat_lines.extend(lines)
+                    group_total_dec = sum(Decimal(str(l["subtotal"])) for l in lines)
+                    group_total = float(group_total_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                    groups.append({"category": cat_name, "lines": lines, "group_total": group_total})
 
-    def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True):
-        html = self._render_pdf_html(request, pl, show_prices=show_prices)
+                ctx = {
+                    "pl": pl,
+                    "groups": groups,
+                    "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
+                    "lines": flat_lines,
+                    "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
+                    "show_prices": show_prices,
+                    "observation": (pl.observation or ""),
+                }
+                html = render_to_string("purchase_list.html", ctx)
+                return html
+
+    def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
+        html = self._render_pdf_html(
+            request,
+            pl,
+            show_prices=show_prices,
+            category_ids=category_ids,
+            category_names=category_names,
+        )
         # 1) WeasyPrint
         try:
             from weasyprint import HTML  # import perezoso
@@ -439,14 +481,24 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
         pl = self.get_object()  # scoped al user
-        hide_param = request.query_params.get("hide_prices", "").lower()
+        params = request.query_params
+        hide_param = params.get("hide_prices", "").lower()
         show_prices = hide_param not in ("1", "true", "yes")
-        pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
+        # filtros opcionales por categoría
+        cats_ids = params.get("category_ids") or params.get("categories") or ""
+        cats_names = params.get("category_names") or ""
+        cat_ids = [x.strip() for x in str(cats_ids).split(",") if x.strip()]
+        cat_names = [x.strip() for x in str(cats_names).split(",") if x.strip()]
+        pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices,
+                                           category_ids=cat_ids or None,
+                                           category_names=cat_names or None)
+
+        
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF en este entorno."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'inline; filename="{pl.series_code or pl.id}.pdf"'
+        resp['Content-Disposition'] = f'attachment; filename="{pl.series_code or pl.id}.pdf"'
         return resp
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
