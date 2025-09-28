@@ -19,9 +19,6 @@ router.register(r'units', UnitViewSet, basename='unit')
 router.register(r'restaurants', RestaurantViewSet, basename='restaurant')
 router.register(r'purchases', PurchaseViewSet, basename='purchase')
 router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list')
-router.register(r'purchase-list-items', PurchaseListItemReadOnlyViewSet, 
-basename='purchase-list-items')
-router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-lists')
 
 urlpatterns = [
     # --- Auth ---
@@ -34,8 +31,6 @@ urlpatterns = [
     # --- Config pública (sin autenticación) ---
     # Quedará como /api/public/config/ cuando incluyas core.urls bajo el prefijo /api/
     path('public/config/', PublicConfigAPIView.as_view(), name='public_config'),
-    # extra (lista plana por query param, usada a veces por el frontend)
-    path('api/purchase-list-items/', PurchaseListItemsListApi.as_view()),
 ]
 
 # Endpoints del router (CRUDs)
