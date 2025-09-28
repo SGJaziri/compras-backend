@@ -392,7 +392,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl = self.get_object()  # ya viene scoped por usuario
         qs = (pl.items
                 .select_related('product__category', 'unit')
-                .all()
                 .order_by('id'))
         data = PurchaseListItemSerializer(qs, many=True, context={'request': request}).data
         return Response(data, status=200)
