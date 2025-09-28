@@ -314,32 +314,39 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return None
 
     # ---------- Acciones ----------
-    @action(detail=True, methods=['post'], url_path='finalize')
-    def finalize(self, request, pk=None):
-        """Finaliza una lista solo si todos los ítems no monetarios tienen precio."""
+    @action(detail=True, methods=['get', 'post'], url_path='items')
+    def items(self, request, pk=None):
+        """
+        GET  -> lista los ítems de la purchase_list (para 'Completar precios').
+        POST -> agrega un ítem (comportamiento actual).
+        """
         pl = self.get_object()
+
+        if request.method.lower() == 'get':
+            qs = pl.items.select_related("product", "unit").all()
+            ser = PurchaseListItemSerializer(qs, many=True, context={"request": request})
+            return Response(ser.data, status=200)
+
+        # --- POST (agregar) ---
         if pl.status == "final":
-            return Response({"detail": "La lista ya está finalizada."}, status=400)
+            return Response({"detail": "No se pueden editar listas finalizadas."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data.copy()
+        data['purchase_list'] = pl.id
+        ser = PurchaseListItemSerializer(data=data, context={"request": request})
+
+        if not ser.is_valid():
+            return Response(ser.errors, status=400)
+
         try:
-            self._ensure_complete_prices(pl)
+            obj = ser.save()
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
+        except Exception as e:
+            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
-        pl.status = "final"
-        pl.finalized_at = timezone.now()
-        if not pl.series_code:
-            try:
-                from .services.serials import next_series_code
-                pl.series_code = next_series_code(pl.restaurant)
-            except Exception:
-                try:
-                    from .services import generate_series_code
-                    pl.series_code = generate_series_code(pl.restaurant)
-                except Exception:
-                    pl.series_code = f"{timezone.now().year}-{pl.restaurant.code}-{pl.id:04d}"
-
-        pl.save(update_fields=["status", "finalized_at", "series_code"])
-        return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
+        return Response(PurchaseListItemSerializer(obj, context={"request": request}).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
@@ -438,15 +445,34 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     # ---------- PDF por lista ----------
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
-        pl = self.get_object()  # scoped al user
+        pl = self.get_object()
         hide_param = request.query_params.get("hide_prices", "").lower()
         show_prices = hide_param not in ("1", "true", "yes")
         pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF en este entorno."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # --- nombre de archivo ---
+        def _series_like(p: PurchaseList) -> str:
+            base = p.series_code
+            if not base:
+                # sin serie: estilo historial (año-código-id)
+                year = timezone.localdate().year
+                rcode = getattr(p.restaurant, "code", None) or getattr(p.restaurant, "name", "R")
+                base = f"{year}-{rcode}-{p.id:04d}"
+            if not show_prices:
+                parts = base.split("-")
+                if len(parts) >= 3:
+                    base = f"{'-'.join(parts[:-1])}-Sn-{parts[-1]}"
+                else:
+                    base = f"{base}-Sn"
+            return base
+
+        filename = f"{_series_like(pl)}.pdf"
+
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'inline; filename="{pl.series_code or pl.id}.pdf"'
+        resp['Content-Disposition'] = f'inline; filename="{filename}"'
         return resp
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
