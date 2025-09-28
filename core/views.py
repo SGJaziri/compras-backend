@@ -314,16 +314,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return None
 
     # ---------- Acciones ----------
-    # core/views.py  (dentro de PurchaseListViewSet)
+# core/views.py  (dentro de PurchaseListViewSet)
     @action(detail=True, methods=['get', 'post'], url_path='items')
     def items(self, request, pk=None):
         """
         GET  -> listar ítems de la lista (para el modal 'Completar precios')
-        POST -> agregar ítem a la lista (builder)
+        POST -> agregar ítem (comportamiento previo)
         """
         pl = self.get_object()
 
-        # -------- GET: devolver filas para el modal ----------
         if request.method.lower() == 'get':
             qs = (pl.items
                     .select_related('product__category', 'unit')
@@ -331,15 +330,13 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             ser = PurchaseListItemSerializer(qs, many=True, context={'request': request})
             return Response(ser.data, status=200)
 
-        # -------- POST: agregar ítem (misma URL) ------------
+        # --- POST (igual que antes) ---
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
                             status=status.HTTP_400_BAD_REQUEST)
 
         data = request.data.copy()
-        # blindar: forzar la lista correcta
         data['purchase_list'] = pl.id
-
         ser = PurchaseListItemSerializer(data=data, context={'request': request})
         if not ser.is_valid():
             return Response(ser.errors, status=400)
@@ -352,6 +349,36 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
         return Response(PurchaseListItemSerializer(obj, context={'request': request}).data, status=201)
+
+    @action(detail=True, methods=['post'], url_path='add_items')
+    def add_item(self, request, pk=None):
+        """Agregar ítem a la lista (builder)."""
+        pl = self.get_object()
+        if pl.status == "final":
+            return Response({"detail": "No se pueden editar listas finalizadas."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data.copy()
+        # No confíes en purchase_list del body
+        data.pop('purchase_list', None)
+
+        # ⬇⬇⬇ **cambio clave**: pasamos request y la instancia de la lista en el contexto
+        ser = PurchaseListItemSerializer(
+            data=data,
+            context={"request": request, "purchase_list": pl}
+        )
+
+        if not ser.is_valid():
+            return Response(ser.errors, status=400)
+
+        try:
+            obj = ser.save(purchase_list=pl)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+        except Exception as e:
+            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
+
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):
@@ -416,33 +443,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
              "id": pl.id, "series_code": pl.series_code},
             status=200
         )
-
-    @action(detail=True, methods=['get'], url_path='pdf')
-    def pdf(self, request, pk=None):
-        pl = self.get_object()
-        hide_param = request.query_params.get("hide_prices", "").lower()
-        show_prices = hide_param not in ("1", "true", "yes")
-        pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
-        if not pdf_bytes:
-            return Response({"detail": "No se pudo generar el PDF en este entorno."},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # nombre tipo historial + sufijo -Sn cuando se ocultan precios
-        def _series_like(p: PurchaseList) -> str:
-            base = p.series_code
-            if not base:
-                year = timezone.localdate().year
-                rcode = getattr(p.restaurant, "code", None) or getattr(p.restaurant, "name", "R")
-                base = f"{year}-{rcode}-{p.id:04d}"
-            if not show_prices:
-                parts = base.split("-")
-                base = f"{'-'.join(parts[:-1])}-Sn-{parts[-1]}" if len(parts) >= 3 else f"{base}-Sn"
-            return base
-
-        filename = f"{_series_like(pl)}.pdf"
-        resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'inline; filename="{filename}"'
-        return resp
 
     # ---------- PDF por lista ----------
     @action(detail=True, methods=['get'], url_path='pdf')
