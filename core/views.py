@@ -44,17 +44,15 @@ class ChangePasswordView(APIView):
 # ---------------- Scoped mixin (aislar por usuario) ----------------
 class OwnedQuerysetMixin:
     """Filtra por owner/created_by = request.user."""
-    owner_field = 'owner'  # override donde sea necesario
+    owner_field = 'owner'
 
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
         if not user or not user.is_authenticated:
             return qs.none()
-        # Si el modelo tiene 'owner', filtra por ahí
         if hasattr(self.Meta, "model") and hasattr(self.Meta.model, self.owner_field):
             return qs.filter(**{self.owner_field: user})
-        # Si no, probar con 'created_by'
         if hasattr(self.Meta, "model") and hasattr(self.Meta.model, 'created_by'):
             return qs.filter(created_by=user)
         return qs.none()
@@ -73,7 +71,6 @@ class OwnedQuerysetMixin:
 
 # ---------------- Permisos base ----------------
 class DefaultPerm(permissions.IsAuthenticated):
-    """Permiso por defecto para panel/admin."""
     pass
 
 
@@ -97,7 +94,7 @@ class AuthConfigView(APIView):
 
 
 class PublicConfigAPIView(APIView):
-    """Config pública (sin autenticación) para el módulo de reportes/PDF."""
+    """Config pública usada por el módulo de reportes/PDF."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
@@ -178,18 +175,12 @@ def _csv_to_list(s: str):
     return [x.strip() for x in s.split(",") if x and str(x).strip()]
 
 def _collect_multi(request, *keys: str):
-    """
-    Lee valores de múltiples nombres de parámetro.
-    - Soporta ?k=1,2 y ?k=1&k=2
-    - Devuelve lista de strings única (sin vacíos)
-    """
     out = []
     for k in keys:
         out += request.query_params.getlist(k)
         val = request.query_params.get(k)
         if val:
             out += _csv_to_list(val)
-    # normalizar
     dedup, seen = [], set()
     for v in out:
         s = str(v).strip()
@@ -201,10 +192,6 @@ def _collect_multi(request, *keys: str):
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
-    """
-    Requiere autenticación.
-    El queryset siempre se filtra por created_by=request.user.
-    """
     serializer_class = PurchaseListSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -218,9 +205,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
-    # ---------- Helpers internos ----------
+    # ---------- Helpers ----------
     def _ensure_complete_prices(self, pl: PurchaseList):
-        """Verifica que todos los ítems no monetarios tengan price_soles."""
         missing = []
         for it in pl.items.select_related("unit", "product").all():
             if it.unit and not it.unit.is_currency and it.price_soles in (None,):
@@ -230,7 +216,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             raise ValidationError(msg if len(missing) <= 10 else msg + f" y {len(missing)-10} más")
 
     def _render_pdf_html(self, request, pl: PurchaseList, show_prices: bool = True):
-        """Construye el HTML del PDF agrupando por categoría con decimales correctos."""
         items_qs = pl.items.select_related("product__category", "unit").all()
         groups_map, grand_total = {}, Decimal("0.00")
         for it in items_qs:
@@ -274,7 +259,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True):
         html = self._render_pdf_html(request, pl, show_prices=show_prices)
         try:
-            from weasyprint import HTML  # import perezoso
+            from weasyprint import HTML
             return HTML(string=html, base_url=request.build_absolute_uri("/")).write_pdf()
         except Exception:
             try:
@@ -324,7 +309,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):
-        """Completa una lista en borrador; si queda completa se finaliza."""
+        """Completa una lista en borrador; si queda completa se finaliza automáticamente."""
         pl = self.get_object()
         if pl.status == "final":
             return Response({"detail": "La lista ya está finalizada."}, status=400)
@@ -380,7 +365,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
-        """PDF de una lista (nombre tipo historial y sufijo -Sn cuando se ocultan precios)."""
+        """PDF de una lista; si se ocultan precios agrega sufijo -Sn al nombre."""
         pl = self.get_object()
         hide_param = request.query_params.get("hide_prices", "").lower()
         show_prices = hide_param not in ("1", "true", "yes")
@@ -461,7 +446,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                  .select_related("purchase_list__restaurant", "product__category", "unit")
                  .filter(purchase_list__in=qs_lists))
 
-        # ---- filtros opcionales ----
         filters = filters or {}
         cat_ids   = filters.get("category_ids") or []
         cat_names = filters.get("category_names") or []
@@ -568,7 +552,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='export/range')
     def export_range(self, request):
-        """JSON del rango (solo del usuario)."""
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"
@@ -598,7 +581,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='export/range/pdf')
     def export_range_pdf(self, request):
-        """PDF del rango (solo del usuario)."""
         start = request.query_params.get("start")
         end = request.query_params.get("end")
         only_final = request.query_params.get("only_final", "true").lower() != "false"
@@ -646,11 +628,12 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No se pudo generar el PDF del reporte."}, status=500)
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'attachment; filename="reporte-{payload['start']}_{payload['end']}.pdf"'
+        # ✅ comillas correctas dentro del f-string
+        resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
 
 
-# -------- Endpoint plano para listar ítems por lista (opcional) --------
+# -------- Endpoint auxiliar opcional --------
 class PurchaseListItemsListApi(APIView):
     permission_classes = [IsAuthenticated]
 
