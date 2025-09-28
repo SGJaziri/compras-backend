@@ -791,34 +791,19 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return resp
 
 class PurchaseListItemViewSet(viewsets.ModelViewSet):
-    """
-    /api/purchase-list-items/             (GET list)
-    /api/purchase-list-items/<id>/        (GET retrieve, PATCH partial_update)
-    """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = PurchaseListItemSerializer
-    http_method_names = ['get', 'patch', 'head', 'options']  # habilita PATCH
+    http_method_names = ['get','patch','head','options']
 
     def get_queryset(self):
-        # sólo ítems de listas creadas por el usuario
-        return (
-            PurchaseListItem.objects
-            .select_related('product__category', 'unit', 'purchase_list__restaurant')
-            .filter(purchase_list__created_by=self.request.user)
-            .order_by('id')
-        )
-
-    def partial_update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        pl = instance.purchase_list
-
-        # evita modificar listas finalizadas
-        if getattr(pl, 'status', '') == 'final':
-            return Response(
-                {"detail": "La lista está finalizada y no se puede modificar."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # sólo permitimos actualizar campos válidos (p. ej. price_soles)
-        # DRF ya validará tipos/rangos si lo definiste en el serializer
-        return super().partial_update(request, *args, **kwargs)
+        qs = (PurchaseListItem.objects
+              .select_related('product__category', 'unit', 'purchase_list__restaurant')
+              .filter(purchase_list__created_by=self.request.user)
+              .order_by('id'))
+        pl = self.request.query_params.get('purchase_list') or self.request.query_params.get('purchase_list_id')
+        if pl is not None:
+            try:
+                qs = qs.filter(purchase_list_id=int(pl))
+            except ValueError:
+                qs = qs.none()
+        return qs
