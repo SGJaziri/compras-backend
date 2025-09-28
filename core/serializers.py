@@ -141,7 +141,8 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseListItem
         fields = (
-            "id",
+            'id', 'restaurant', 'status', 'series_code',
+            'created_at', 'finalized_at', 'notes',
             "purchase_list",
             "product", "product_name",
             "unit", "unit_name", "unit_is_currency","unit_symbol",
@@ -149,10 +150,16 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
             "price_soles",
             "subtotal_soles",
         )
-        read_only_fields = ("purchase_list",)  # <- **clave**
+        read_only_fields = ("purchase_list",'created_at', 'finalized_at', 'series_code')  # <- **clave**
         extra_kwargs = {
             "price_soles": {"required": False, "allow_null": True},
         }
+        
+    def validate_status(self, v):
+        # opcional: impedir volver de 'final' a 'draft'
+        if self.instance and getattr(self.instance, 'status', '') == 'final' and v != 'final':
+            raise serializers.ValidationError("Una lista finalizada no puede volver a borrador.")
+        return v
 
     # Limitar querysets en escritura según el usuario
     def __init__(self, *args, **kwargs):
