@@ -317,17 +317,21 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get', 'post'], url_path='items')
     def items(self, request, pk=None):
         """
-        GET  -> lista los ítems de la purchase_list (para 'Completar precios').
-        POST -> agrega un ítem (comportamiento actual).
+        GET  -> devuelve los ítems de la lista (solo lectura).
+        POST -> agrega un ítem a la lista (builder).
         """
         pl = self.get_object()
 
-        if request.method.lower() == 'get':
-            qs = pl.items.select_related("product", "unit").all()
-            ser = PurchaseListItemSerializer(qs, many=True, context={"request": request})
-            return Response(ser.data, status=200)
+        # ----- GET: listar ítems -----
+        if request.method == 'GET':
+            qs = (pl.items
+                    .select_related('product__category', 'unit')
+                    .all()
+                 )
+            data = PurchaseListItemSerializer(qs, many=True).data
+            return Response(data, status=200)
 
-        # --- POST (agregar) ---
+        # ----- POST: agregar ítem -----
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
                             status=status.HTTP_400_BAD_REQUEST)
@@ -335,7 +339,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         data = request.data.copy()
         data['purchase_list'] = pl.id
         ser = PurchaseListItemSerializer(data=data, context={"request": request})
-
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
@@ -346,7 +349,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
-        return Response(PurchaseListItemSerializer(obj, context={"request": request}).data, status=201)
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
+
 
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
@@ -749,3 +753,21 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
         resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
+
+class PurchaseListItemsListApi(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        pl_id = request.query_params.get("purchase_list")
+        qs = (PurchaseListItem.objects
+                .select_related("purchase_list__restaurant", "product__category", "unit")
+                .filter(purchase_list__created_by=request.user)
+             )
+        if pl_id:
+            try:
+                qs = qs.filter(purchase_list_id=int(pl_id))
+            except Exception:
+                return Response({"detail": "purchase_list inválido."}, status=400)
+
+        data = PurchaseListItemSerializer(qs, many=True, context={"request": request}).data
+        return Response(data, status=200)
