@@ -314,43 +314,43 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return None
 
     # ---------- Acciones ----------
-    @action(detail=True, methods=['get', 'post'], url_path='items')
-    def items(self, request, pk=None):
-        """
-        GET  -> devuelve los ítems de la lista (solo lectura).
-        POST -> agrega un ítem a la lista (builder).
-        """
-        pl = self.get_object()
+# core/views.py  (dentro de PurchaseListViewSet)
 
-        # ----- GET: listar ítems -----
-        if request.method == 'GET':
-            qs = (pl.items
-                    .select_related('product__category', 'unit')
-                    .all()
-                 )
-            data = PurchaseListItemSerializer(qs, many=True).data
-            return Response(data, status=200)
+@action(detail=True, methods=['get', 'post'], url_path='items')
+def items(self, request, pk=None):
+    """
+    GET  -> devuelve los items de la lista (para 'Completar precios')
+    POST -> agrega un item (comportamiento existente)
+    """
+    pl = self.get_object()
 
-        # ----- POST: agregar ítem -----
-        if pl.status == "final":
-            return Response({"detail": "No se pueden editar listas finalizadas."},
-                            status=status.HTTP_400_BAD_REQUEST)
+    if request.method == 'GET':
+        ser = PurchaseListItemSerializer(
+            pl.items.select_related("product__category", "unit").all(),
+            many=True
+        )
+        return Response(ser.data, status=200)
 
-        data = request.data.copy()
-        data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data, context={"request": request})
-        if not ser.is_valid():
-            return Response(ser.errors, status=400)
+    # --- POST (lo que antes hacía add_item) ---
+    if pl.status == "final":
+        return Response({"detail": "No se pueden editar listas finalizadas."},
+                        status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            obj = ser.save()
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
-        except Exception as e:
-            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
+    data = request.data.copy()
+    data['purchase_list'] = pl.id
+    ser = PurchaseListItemSerializer(data=data, context={"request": request})
 
-        return Response(PurchaseListItemSerializer(obj).data, status=201)
+    if not ser.is_valid():
+        return Response(ser.errors, status=400)
 
+    try:
+        obj = ser.save()
+    except ValidationError as e:
+        return Response({"detail": str(e)}, status=400)
+    except Exception as e:
+        return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
+
+    return Response(PurchaseListItemSerializer(obj).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
