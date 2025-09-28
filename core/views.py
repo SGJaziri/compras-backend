@@ -383,13 +383,19 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
-    @action(detail=True, methods=['get'], url_path='items')
+    @action(detail=True, methods=['get'], url_path='items', permission_classes=[IsAuthenticated])
     def list_items(self, request, pk=None):
-        """Listar ítems de la lista (para completar precios)."""
-        pl = self.get_object()  # ya scoping por usuario
-        qs = pl.items.select_related('product__category', 'unit').all()
+        """
+        Devuelve los ítems de la lista para completar precios.
+        URL: /api/purchase-lists/<id>/items/
+        """
+        pl = self.get_object()  # ya viene scoped por usuario
+        qs = (pl.items
+                .select_related('product__category', 'unit')
+                .all()
+                .order_by('id'))
         data = PurchaseListItemSerializer(qs, many=True, context={'request': request}).data
-        return Response(data)
+        return Response(data, status=200)
 
 
     @action(detail=True, methods=['post'], url_path='items')
@@ -784,3 +790,17 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
         resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
+
+class PurchaseListItemViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PurchaseListItemSerializer
+
+    def get_queryset(self):
+        qs = (PurchaseListItem.objects
+                .select_related('product__category', 'unit', 'purchase_list__restaurant')
+                .filter(purchase_list__created_by=self.request.user)
+                .order_by('id'))
+        pl = self.request.query_params.get('purchase_list')
+        if pl:
+            qs = qs.filter(purchase_list_id=pl)
+        return qs

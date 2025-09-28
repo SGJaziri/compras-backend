@@ -19,6 +19,8 @@ router.register(r'units', UnitViewSet, basename='unit')
 router.register(r'restaurants', RestaurantViewSet, basename='restaurant')
 router.register(r'purchases', PurchaseViewSet, basename='purchase')
 router.register(r'purchase-lists', PurchaseListViewSet, basename='purchase-list')
+router.register(r'purchase-list-items', PurchaseListItemViewSet, basename='purchase-list-item')
+
 
 urlpatterns = [
     # --- Auth ---
