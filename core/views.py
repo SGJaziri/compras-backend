@@ -386,10 +386,10 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='items', permission_classes=[IsAuthenticated])
     def list_items(self, request, pk=None):
         """
-        Devuelve los ítems de la lista para completar precios.
-        URL: /api/purchase-lists/<id>/items/
+        GET /api/purchase-lists/<id>/items/
+        Devuelve SOLO los ítems de esa lista.
         """
-        pl = self.get_object()  # ya viene scoped por usuario
+        pl = self.get_object()  # scope por usuario
         qs = (pl.items
                 .select_related('product__category', 'unit')
                 .order_by('id'))
