@@ -442,34 +442,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     # ---------- PDF por lista ----------
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
-        pl = self.get_object()
+        pl = self.get_object()  # scoped al user
         hide_param = request.query_params.get("hide_prices", "").lower()
         show_prices = hide_param not in ("1", "true", "yes")
         pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices)
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF en este entorno."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # --- nombre de archivo ---
-        def _series_like(p: PurchaseList) -> str:
-            base = p.series_code
-            if not base:
-                # sin serie: estilo historial (año-código-id)
-                year = timezone.localdate().year
-                rcode = getattr(p.restaurant, "code", None) or getattr(p.restaurant, "name", "R")
-                base = f"{year}-{rcode}-{p.id:04d}"
-            if not show_prices:
-                parts = base.split("-")
-                if len(parts) >= 3:
-                    base = f"{'-'.join(parts[:-1])}-Sn-{parts[-1]}"
-                else:
-                    base = f"{base}-Sn"
-            return base
-
-        filename = f"{_series_like(pl)}.pdf"
-
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'inline; filename="{filename}"'
+        resp['Content-Disposition'] = f'inline; filename="{pl.series_code or pl.id}.pdf"'
         return resp
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
