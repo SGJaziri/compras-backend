@@ -136,13 +136,15 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     unit_is_currency = serializers.SerializerMethodField(read_only=True)
     subtotal_soles = serializers.SerializerMethodField(read_only=True)
 
+    unit_symbol = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = PurchaseListItem
         fields = (
             "id",
             "purchase_list",
             "product", "product_name",
-            "unit", "unit_name", "unit_is_currency",
+            "unit", "unit_name", "unit_is_currency","unit_symbol",
             "qty",
             "price_soles",
             "subtotal_soles",
@@ -170,6 +172,9 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
 
     def get_unit_name(self, obj):
         return getattr(obj.unit, "name", None)
+
+    def get_unit_symbol(self, obj):
+        return getattr(obj.unit, "symbol", None)
 
     def get_unit_is_currency(self, obj):
         return bool(getattr(obj.unit, "is_currency", False))

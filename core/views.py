@@ -383,6 +383,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
+    @action(detail=True, methods=['get'], url_path='items')
+    def list_items(self, request, pk=None):
+        """Listar ítems de la lista (para completar precios)."""
+        pl = self.get_object()  # ya scoping por usuario
+        qs = pl.items.select_related('product__category', 'unit').all()
+        data = PurchaseListItemSerializer(qs, many=True, context={'request': request}).data
+        return Response(data)
+
+
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
         """Agregar ítem a la lista (builder)."""
