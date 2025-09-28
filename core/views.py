@@ -315,29 +315,31 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     # ---------- Acciones ----------
 # core/views.py  (dentro de PurchaseListViewSet)
+
     @action(detail=True, methods=['get', 'post'], url_path='items')
     def items(self, request, pk=None):
         """
-        GET  -> listar ítems de la lista (para el modal 'Completar precios')
-        POST -> agregar ítem (comportamiento previo)
+        GET  -> devuelve los items de la lista (para 'Completar precios')
+        POST -> agrega un item (comportamiento existente)
         """
         pl = self.get_object()
 
-        if request.method.lower() == 'get':
-            qs = (pl.items
-                    .select_related('product__category', 'unit')
-                    .order_by('id'))
-            ser = PurchaseListItemSerializer(qs, many=True, context={'request': request})
+        if request.method == 'GET':
+            ser = PurchaseListItemSerializer(
+                pl.items.select_related("product__category", "unit").all(),
+                many=True
+            )
             return Response(ser.data, status=200)
 
-        # --- POST (igual que antes) ---
+        # --- POST (lo que antes hacía add_item) ---
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
                             status=status.HTTP_400_BAD_REQUEST)
 
         data = request.data.copy()
         data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data, context={'request': request})
+        ser = PurchaseListItemSerializer(data=data, context={"request": request})
+
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
@@ -348,9 +350,9 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
-        return Response(PurchaseListItemSerializer(obj, context={'request': request}).data, status=201)
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
 
-    @action(detail=True, methods=['post'], url_path='add_items')
+    @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
         """Agregar ítem a la lista (builder)."""
         pl = self.get_object()
