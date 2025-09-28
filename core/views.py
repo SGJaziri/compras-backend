@@ -341,39 +341,35 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         pl.save(update_fields=["status", "finalized_at", "series_code"])
         return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
-    @action(detail=True, methods=['get', 'post'], url_path='items')
-    def items(self, request, pk=None):
-        """
-        GET  -> lista los ítems de la purchase_list (para 'Completar precios').
-        POST -> agrega un ítem (comportamiento actual).
-        """
+    @action(detail=True, methods=['post'], url_path='items')
+    def add_item(self, request, pk=None):
+        """Agregar ítem a la lista (builder)."""
         pl = self.get_object()
-
-        if request.method.lower() == 'get':
-            qs = pl.items.select_related("product", "unit").all()
-            ser = PurchaseListItemSerializer(qs, many=True, context={"request": request})
-            return Response(ser.data, status=200)
-
-        # --- POST (agregar) ---
         if pl.status == "final":
             return Response({"detail": "No se pueden editar listas finalizadas."},
                             status=status.HTTP_400_BAD_REQUEST)
 
         data = request.data.copy()
-        data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data, context={"request": request})
+        # No confíes en purchase_list del body
+        data.pop('purchase_list', None)
+
+        # ⬇⬇⬇ **cambio clave**: pasamos request y la instancia de la lista en el contexto
+        ser = PurchaseListItemSerializer(
+            data=data,
+            context={"request": request, "purchase_list": pl}
+        )
 
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
         try:
-            obj = ser.save()
+            obj = ser.save(purchase_list=pl)
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
         except Exception as e:
             return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
 
-        return Response(PurchaseListItemSerializer(obj, context={"request": request}).data, status=201)
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):
