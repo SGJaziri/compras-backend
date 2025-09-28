@@ -137,6 +137,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     subtotal_soles = serializers.SerializerMethodField(read_only=True)
 
     unit_symbol = serializers.SerializerMethodField(read_only=True)
+    restaurant = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = PurchaseListItem
@@ -154,7 +155,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "price_soles": {"required": False, "allow_null": True},
         }
-        
+
     def validate_status(self, v):
         # opcional: impedir volver de 'final' a 'draft'
         if self.instance and getattr(self.instance, 'status', '') == 'final' and v != 'final':
@@ -164,14 +165,10 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     # Limitar querysets en escritura según el usuario
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        user = _get_request_user(self)
-        if user and user.is_authenticated:
-            self.fields["product"].queryset = Product.objects.filter(owner=user)
-            self.fields["unit"].queryset = Unit.objects.filter(owner=user)
-            # purchase_list es read_only; no necesitamos queryset aquí
-        else:
+        # Esto ya lo tenías: ajustar queryset en campos de escritura
+        if "product" in self.fields:
+            from .models import Product
             self.fields["product"].queryset = Product.objects.none()
-            self.fields["unit"].queryset = Unit.objects.none()
 
     # ------- Getters de solo lectura -------
     def get_product_name(self, obj):
@@ -187,19 +184,15 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
         return bool(getattr(obj.unit, "is_currency", False))
 
     def get_subtotal_soles(self, obj):
-        """
-        Si la unidad es monetaria (S/), el subtotal es la cantidad (importe).
-        Si no, subtotal = qty * price_soles. Devuelve Decimal a 2dp.
-        """
+        if obj.price_soles is None or obj.qty is None:
+            return None
         try:
-            is_currency = bool(getattr(obj.unit, "is_currency", False))
-            q = obj.qty or Decimal("0")
-            if is_currency:
-                return _dec2(q)
-            p = obj.price_soles or Decimal("0")
-            return _dec2(q * p)
+            return float(obj.price_soles) * float(obj.qty)
         except Exception:
-            return Decimal("0.00")
+            return None
+
+    def get_restaurant(self, obj):
+        return getattr(getattr(obj, "purchase_list", None), "restaurant_id", None)
 
     # ------- Validación V2 -------
     def validate(self, attrs):
