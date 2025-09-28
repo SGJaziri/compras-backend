@@ -1,4 +1,3 @@
-# core/views.py
 from django.utils import timezone
 from django.template.loader import render_to_string
 from django.http import HttpResponse
@@ -79,8 +78,6 @@ class DefaultPerm(permissions.IsAuthenticated):
 
 
 # --------------- Config (autenticado y por usuario) ---------------
-# --------------- Config ---------------
-
 class AuthConfigView(APIView):
     """
     Config/ catálogo del usuario autenticado.
@@ -353,14 +350,20 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
 
         data = request.data.copy()
-        data['purchase_list'] = pl.id
-        ser = PurchaseListItemSerializer(data=data)
+        # No confíes en purchase_list del body
+        data.pop('purchase_list', None)
+
+        # ⬇⬇⬇ **cambio clave**: pasamos request y la instancia de la lista en el contexto
+        ser = PurchaseListItemSerializer(
+            data=data,
+            context={"request": request, "purchase_list": pl}
+        )
 
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
         try:
-            obj = ser.save()
+            obj = ser.save(purchase_list=pl)
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
         except Exception as e:

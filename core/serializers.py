@@ -1,4 +1,3 @@
-# core/serializers.py
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from rest_framework import serializers
@@ -127,7 +126,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     """
     Reglas V2:
     - product y unit deben pertenecer al usuario.
-    - purchase_list debe pertenecer al usuario y no estar finalizada para editar.
+    - purchase_list se toma de la URL (read_only) y la inyecta la vista.
     - Si unit.is_currency=True: qty es importe y price_soles se fuerza a None.
     - Si NO es monetaria: en borrador price_soles puede ser None, en final es requerido.
     """
@@ -148,6 +147,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
             "price_soles",
             "subtotal_soles",
         )
+        read_only_fields = ("purchase_list",)  # <- **clave**
         extra_kwargs = {
             "price_soles": {"required": False, "allow_null": True},
         }
@@ -159,11 +159,10 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
         if user and user.is_authenticated:
             self.fields["product"].queryset = Product.objects.filter(owner=user)
             self.fields["unit"].queryset = Unit.objects.filter(owner=user)
-            self.fields["purchase_list"].queryset = PurchaseList.objects.filter(created_by=user)
+            # purchase_list es read_only; no necesitamos queryset aquí
         else:
             self.fields["product"].queryset = Product.objects.none()
             self.fields["unit"].queryset = Unit.objects.none()
-            self.fields["purchase_list"].queryset = PurchaseList.objects.none()
 
     # ------- Getters de solo lectura -------
     def get_product_name(self, obj):
@@ -178,7 +177,7 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
     def get_subtotal_soles(self, obj):
         """
         Si la unidad es monetaria (S/), el subtotal es la cantidad (importe).
-        Si no, subtotal = qty * price_soles. Devuelve Decimal a 2dp (o float si prefieres).
+        Si no, subtotal = qty * price_soles. Devuelve Decimal a 2dp.
         """
         try:
             is_currency = bool(getattr(obj.unit, "is_currency", False))
@@ -198,19 +197,25 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             raise serializers.ValidationError("No autenticado.")
 
+        # purchase_list llega por contexto o por la instancia (nunca por attrs porque es read_only)
+        pl = (
+            attrs.get("purchase_list")
+            or getattr(self.instance, "purchase_list", None)
+            or (self.context.get("purchase_list") if self.context else None)
+        )
+
         unit = attrs.get("unit") or getattr(self.instance, "unit", None)
-        pl   = attrs.get("purchase_list") or getattr(self.instance, "purchase_list", None)
+        product = attrs.get("product") or getattr(self.instance, "product", None)
         qty  = attrs.get("qty") if "qty" in attrs else getattr(self.instance, "qty", None)
         price = attrs.get("price_soles") if "price_soles" in attrs else getattr(self.instance, "price_soles", None)
-        product = attrs.get("product") or getattr(self.instance, "product", None)
 
         # Existencia y tipos
-        if not unit or not isinstance(unit, UnitModel):
+        if not isinstance(unit, UnitModel):
             raise serializers.ValidationError({"unit": "Unidad inválida."})
-        if not pl or not isinstance(pl, PurchaseListModel):
-            raise serializers.ValidationError({"purchase_list": "Lista inválida."})
-        if not product or not isinstance(product, ProductModel):
+        if not isinstance(product, ProductModel):
             raise serializers.ValidationError({"product": "Producto inválido."})
+        if pl is None or not isinstance(pl, PurchaseListModel):
+            raise serializers.ValidationError({"purchase_list": "Lista inválida o ausente."})
         if qty is None:
             raise serializers.ValidationError({"qty": "Cantidad requerida."})
 
@@ -238,7 +243,6 @@ class PurchaseListItemSerializer(serializers.ModelSerializer):
                     Decimal(str(price))
                 except Exception:
                     raise serializers.ValidationError({"price_soles": "Formato inválido."})
-            # En 'final' price es obligatorio (la comprobación final se hace en la vista también)
             if pl.status == "final" and price is None:
                 raise serializers.ValidationError({
                     "price_soles": "Requerido al finalizar la lista (unidad no monetaria)."
@@ -264,5 +268,5 @@ class PurchaseListSerializer(serializers.ModelSerializer):
             "finalized_at",
             "items",
         )
-    # Evitar que el cliente pueda asignar created_by manualmente
+        # Evitar que el cliente pueda asignar created_by manualmente
         read_only_fields = ("series_code", "status", "created_by", "created_at", "finalized_at")
