@@ -8,7 +8,7 @@ from .views import (
     AuthConfigView,
     PublicConfigAPIView,
     CategoryViewSet, ProductViewSet, RestaurantViewSet, UnitViewSet,
-    PurchaseViewSet, PurchaseListViewSet,
+    PurchaseViewSet, PurchaseListViewSet, PurchaseListItemViewSet,
 )
 
 # DRF Router (CRUDs)
