@@ -384,33 +384,14 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
-        """Agregar ítem a la lista (builder)."""
         pl = self.get_object()
-        if pl.status == "final":
-            return Response({"detail": "No se pueden editar listas finalizadas."},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        data = request.data.copy()
-        # No confíes en purchase_list del body
-        data.pop('purchase_list', None)
-
-        # ⬇⬇⬇ **cambio clave**: pasamos request y la instancia de la lista en el contexto
-        ser = PurchaseListItemSerializer(
-            data=data,
+        serializer = PurchaseListItemSerializer(
+            data=request.data,
             context={"request": request, "purchase_list": pl}
         )
-
-        if not ser.is_valid():
-            return Response(ser.errors, status=400)
-
-        try:
-            obj = ser.save(purchase_list=pl)
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
-        except Exception as e:
-            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
-
-        return Response(PurchaseListItemSerializer(obj).data, status=201)
+        serializer.is_valid(raise_exception=True)
+        obj = serializer.save(purchase_list=pl)  # <-- asegura FK
+        return Response(PurchaseListItemSerializer(obj, context={"request": request}).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):

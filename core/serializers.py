@@ -74,12 +74,16 @@ class ProductSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         user = _get_request_user(self)
-        if user and user.is_authenticated:
-            self.fields["category"].queryset = Category.objects.filter(owner=user)
-            self.fields["default_unit"].queryset = Unit.objects.filter(owner=user)
+        if user and getattr(user, "is_authenticated", False):
+            if "product" in self.fields:
+                self.fields["product"].queryset = Product.objects.filter(owner=user)
+            if "unit" in self.fields:
+                self.fields["unit"].queryset = Unit.objects.filter(owner=user)
         else:
-            self.fields["category"].queryset = Category.objects.none()
-            self.fields["default_unit"].queryset = Unit.objects.none()
+            if "product" in self.fields:
+                self.fields["product"].queryset = Product.objects.none()
+            if "unit" in self.fields:
+                self.fields["unit"].queryset = Unit.objects.none()
 
     def get_category_name(self, obj):
         return getattr(obj.category, "name", None)
@@ -110,7 +114,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = ("id", "product", "quantity", "unit_price", "line_total")
-        read_only_fields = ("line_total",)
+        read_only_fields = ("series_code", "created_by", "created_at", "finalized_at")
 
 
 class PurchaseSerializer(serializers.ModelSerializer):
