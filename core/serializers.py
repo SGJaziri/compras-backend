@@ -136,19 +136,29 @@ class PurchaseSerializer(serializers.ModelSerializer):
 
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
-    Serializer mínimo para PATCH desde Historial.
-    Solo permite editar price/quantity de forma parcial y segura.
+    PATCH del Historial: acepta price/quantity y también observaciones
+    (notes/observations) sin romper si llegan vacíos.
     """
+    # alias opcional si el front envía 'observations'
+    observations = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    # si tu modelo ya tiene 'notes', esta línea funciona; si se llama 'observations', también lo mapeamos abajo
+    notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
     class Meta:
         model = PurchaseListItem
-        fields = ['price', 'quantity']
+        fields = ['price', 'quantity', 'notes', 'observations']
         extra_kwargs = {
             'price': {'required': False, 'allow_null': True},
             'quantity': {'required': False},
         }
 
+    # Ignora claves desconocidas en el payload (por si el front manda demás)
+    def to_internal_value(self, data):
+        allowed = {'price', 'quantity', 'notes', 'observations'}
+        cleaned = {k: data.get(k) for k in data.keys() if k in allowed}
+        return super().to_internal_value(cleaned)
+
     def validate_price(self, value):
-        # Normaliza '', null, números como string, etc.
         return _to_decimal_or_zero(value)
 
     def validate_quantity(self, value):
@@ -156,12 +166,29 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         touched = []
+
         if 'price' in validated_data:
             instance.price = validated_data['price']
             touched.append('price')
+
         if 'quantity' in validated_data:
             instance.quantity = validated_data['quantity']
             touched.append('quantity')
+
+        # notas / observaciones (acepta cualquiera y mapea al campo real)
+        text = None
+        if 'notes' in validated_data:
+            text = validated_data['notes']
+        elif 'observations' in validated_data:
+            text = validated_data['observations']
+
+        if text is not None:
+            if hasattr(instance, 'notes'):
+                instance.notes = text
+                touched.append('notes')
+            elif hasattr(instance, 'observations'):
+                instance.observations = text
+                touched.append('observations')
 
         if touched:
             instance.save(update_fields=touched)

@@ -210,13 +210,19 @@ def _collect_multi(request, *keys: str):
     return dedup
 # ========================================================================
 
+# core/views.py
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from .models import PurchaseListItem
+from .serializers import PurchaseListItemSerializer, PurchaseListItemPatchSerializer
+
 class PurchaseListItemViewSet(viewsets.ModelViewSet):
     queryset = PurchaseListItem.objects.select_related(
         'product__category', 'unit', 'purchase_list'
     )
     permission_classes = [IsAuthenticated]
-    # Solo lo que usa Historial
-    http_method_names = ['get', 'patch', 'head', 'options']
+    http_method_names = ['get', 'patch', 'head', 'options']  # solo Historial
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -225,23 +231,24 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
             qs = qs.filter(purchase_list_id=pl)
         return qs
 
-    # Usar serializer reducido SOLO en update/partial_update
     def get_serializer_class(self):
         if getattr(self, 'action', None) in ('update', 'partial_update'):
             return PurchaseListItemPatchSerializer
         return PurchaseListItemSerializer
 
-    # Devolvemos SIEMPRE la representación completa tras PATCH
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         instance = self.get_object()
 
+        # 1) validar/actualizar con el serializer de PATCH
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
+        # 2) responder con el serializer completo para que el front se refresque sin cambios
         full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
         return Response(full.data)
+
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
