@@ -217,12 +217,19 @@ class PurchaseListItemViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PurchaseListItemSerializer
     permission_classes = [IsAuthenticated]
 
+    http_method_names = ['get', 'patch', 'head', 'options']
+
     def get_queryset(self):
         qs = super().get_queryset()
         pl = self.request.query_params.get('purchase_list')
         if pl:
             qs = qs.filter(purchase_list_id=pl)
+        # Si usas scoping por usuario/empresa, aplica aquí tu filtro (p.ej. owner=self.request.user)
         return qs
+    
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
