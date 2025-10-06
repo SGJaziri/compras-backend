@@ -210,13 +210,12 @@ def _collect_multi(request, *keys: str):
     return dedup
 # ========================================================================
 
-class PurchaseListItemViewSet(viewsets.ReadOnlyModelViewSet):
+class PurchaseListItemViewSet(viewsets.ModelViewSet):
     queryset = PurchaseListItem.objects.select_related(
         'product__category', 'unit', 'purchase_list'
     )
-    serializer_class = PurchaseListItemSerializer
     permission_classes = [IsAuthenticated]
-
+    # Solo lo que usa Historial
     http_method_names = ['get', 'patch', 'head', 'options']
 
     def get_queryset(self):
@@ -224,12 +223,25 @@ class PurchaseListItemViewSet(viewsets.ReadOnlyModelViewSet):
         pl = self.request.query_params.get('purchase_list')
         if pl:
             qs = qs.filter(purchase_list_id=pl)
-        # Si usas scoping por usuario/empresa, aplica aquí tu filtro (p.ej. owner=self.request.user)
         return qs
-    
+
+    # Usar serializer reducido SOLO en update/partial_update
+    def get_serializer_class(self):
+        if getattr(self, 'action', None) in ('update', 'partial_update'):
+            return PurchaseListItemPatchSerializer
+        return PurchaseListItemSerializer
+
+    # Devolvemos SIEMPRE la representación completa tras PATCH
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
-        return super().update(request, *args, **kwargs)
+        instance = self.get_object()
+
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
+        return Response(full.data)
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):

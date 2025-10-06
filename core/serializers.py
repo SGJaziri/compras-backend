@@ -1,4 +1,4 @@
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from django.conf import settings
 from rest_framework import serializers
 
@@ -27,6 +27,17 @@ def _get_request_user(serializer: serializers.Serializer):
 def _dec2(val: Decimal) -> Decimal:
     """Redondeo a 2 decimales."""
     return (val or Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+def _to_decimal_or_zero(v):
+    if v is None or v == '':
+        return Decimal('0')
+    if isinstance(v, Decimal):
+        return v
+    try:
+        # Evita binarios float: casteo por str
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal('0')
 
 
 # ───────────────── Básicos ─────────────────
@@ -120,6 +131,38 @@ class PurchaseSerializer(serializers.ModelSerializer):
         model = Purchase
         fields = ("id", "restaurant", "serial", "issue_date", "notes", "total_amount", "items")
 
+class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
+    """
+    Serializer mínimo para PATCH desde Historial.
+    Solo permite editar price/quantity de forma parcial y segura.
+    """
+    class Meta:
+        model = PurchaseListItem
+        fields = ['price', 'quantity']
+        extra_kwargs = {
+            'price': {'required': False, 'allow_null': True},
+            'quantity': {'required': False},
+        }
+
+    def validate_price(self, value):
+        # Normaliza '', null, números como string, etc.
+        return _to_decimal_or_zero(value)
+
+    def validate_quantity(self, value):
+        return _to_decimal_or_zero(value)
+
+    def update(self, instance, validated_data):
+        touched = []
+        if 'price' in validated_data:
+            instance.price = validated_data['price']
+            touched.append('price')
+        if 'quantity' in validated_data:
+            instance.quantity = validated_data['quantity']
+            touched.append('quantity')
+
+        if touched:
+            instance.save(update_fields=touched)
+        return instance
 
 # ───────────────── Listas de compras (builder) ─────────────────
 class PurchaseListItemSerializer(serializers.ModelSerializer):
