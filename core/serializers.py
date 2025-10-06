@@ -136,20 +136,36 @@ class PurchaseSerializer(serializers.ModelSerializer):
 
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
-    PATCH del Historial: el frontend envía 'price' y 'quantity';
-    aquí los mapeamos a 'price_soles' y 'qty' del modelo.
-    Acepta también 'notes' u 'observations' si tu modelo las tiene.
+    PATCH del Historial:
+    - Acepta 'price' (o 'price_soles') y lo mapea a price_soles del modelo.
+    - Acepta 'quantity' (o 'qty') y lo mapea a qty del modelo.
+    - Acepta 'notes' u 'observations' si existen en el modelo.
     """
-    # Campos que vienen del front (no existen en el modelo, por eso write_only)
+    # Campos de entrada que puede mandar el front
     price = serializers.CharField(required=False, allow_null=True, write_only=True)
     quantity = serializers.CharField(required=False, write_only=True)
-
+    # aliases opcionales:
     notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
     observations = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = PurchaseListItem
-        fields = ['price', 'quantity', 'notes', 'observations']
+        fields = ['price', 'quantity', 'notes', 'observations']  # solo entrada
+
+    # 🔁 Mapea sinónimos del payload -> campos esperados por este serializer
+    def to_internal_value(self, data):
+        d = dict(data)
+        if 'price' not in d and 'price_soles' in d:
+            d['price'] = d.get('price_soles')
+        if 'quantity' not in d and 'qty' in d:
+            d['quantity'] = d.get('qty')
+        if 'notes' not in d and 'observations' in d:
+            d['notes'] = d.get('observations')
+
+        # Limpiamos a lo permitido para evitar ruido
+        allowed = {'price', 'quantity', 'notes'}
+        cleaned = {k: d.get(k) for k in allowed if k in d}
+        return super().to_internal_value(cleaned)
 
     def validate_price(self, value):
         return _to_decimal_or_zero(value)
@@ -160,7 +176,7 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         touched = []
 
-        # Mapear a los nombres REALES del modelo
+        # ↔️ Mapear a los nombres REALES del modelo
         if 'price' in validated_data:
             instance.price_soles = validated_data['price']
             touched.append('price_soles')
@@ -169,13 +185,8 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
             instance.qty = validated_data['quantity']
             touched.append('qty')
 
-        # notas / observaciones (si existen en tu modelo)
-        text = None
-        if 'notes' in validated_data:
-            text = validated_data['notes']
-        elif 'observations' in validated_data:
-            text = validated_data['observations']
-
+        # notas / observaciones (si existen en el modelo)
+        text = validated_data.get('notes', None)
         if text is not None:
             if hasattr(instance, 'notes'):
                 instance.notes = text
