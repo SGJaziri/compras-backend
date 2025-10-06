@@ -136,27 +136,20 @@ class PurchaseSerializer(serializers.ModelSerializer):
 
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
-    PATCH del Historial: acepta price/quantity y también observaciones
-    (notes/observations) sin romper si llegan vacíos.
+    PATCH del Historial: el frontend envía 'price' y 'quantity';
+    aquí los mapeamos a 'price_soles' y 'qty' del modelo.
+    Acepta también 'notes' u 'observations' si tu modelo las tiene.
     """
-    # alias opcional si el front envía 'observations'
-    observations = serializers.CharField(required=False, allow_blank=True, write_only=True)
-    # si tu modelo ya tiene 'notes', esta línea funciona; si se llama 'observations', también lo mapeamos abajo
+    # Campos que vienen del front (no existen en el modelo, por eso write_only)
+    price = serializers.CharField(required=False, allow_null=True, write_only=True)
+    quantity = serializers.CharField(required=False, write_only=True)
+
     notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    observations = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = PurchaseListItem
         fields = ['price', 'quantity', 'notes', 'observations']
-        extra_kwargs = {
-            'price': {'required': False, 'allow_null': True},
-            'quantity': {'required': False},
-        }
-
-    # Ignora claves desconocidas en el payload (por si el front manda demás)
-    def to_internal_value(self, data):
-        allowed = {'price', 'quantity', 'notes', 'observations'}
-        cleaned = {k: data.get(k) for k in data.keys() if k in allowed}
-        return super().to_internal_value(cleaned)
 
     def validate_price(self, value):
         return _to_decimal_or_zero(value)
@@ -167,15 +160,16 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         touched = []
 
+        # Mapear a los nombres REALES del modelo
         if 'price' in validated_data:
-            instance.price = validated_data['price']
-            touched.append('price')
+            instance.price_soles = validated_data['price']
+            touched.append('price_soles')
 
         if 'quantity' in validated_data:
-            instance.quantity = validated_data['quantity']
-            touched.append('quantity')
+            instance.qty = validated_data['quantity']
+            touched.append('qty')
 
-        # notas / observaciones (acepta cualquiera y mapea al campo real)
+        # notas / observaciones (si existen en tu modelo)
         text = None
         if 'notes' in validated_data:
             text = validated_data['notes']
