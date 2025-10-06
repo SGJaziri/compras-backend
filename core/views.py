@@ -23,7 +23,7 @@ from .models import (
 from .serializers import (
     CategorySerializer, ProductSerializer, RestaurantSerializer, PurchaseSerializer,
     PurchaseListSerializer, PurchaseListItemSerializer, UnitSerializer,
-    ChangePasswordSerializer,
+    ChangePasswordSerializer, PurchaseListItemPatchSerializer
 )
 
 # ---------------- Cambio de contraseña ----------------
