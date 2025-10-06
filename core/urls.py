@@ -1,9 +1,10 @@
 # core/urls.py
-from django.urls import path
+from django.urls import path,include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (
+    PurchaseListItemViewSet,
     ChangePasswordView,
     AuthConfigView,
     PublicConfigAPIView,
