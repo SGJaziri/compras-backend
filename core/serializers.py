@@ -200,138 +200,91 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
         return instance
 
 # ───────────────── Listas de compras (builder) ─────────────────
-class PurchaseListItemSerializer(serializers.ModelSerializer):
+class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
-    Reglas V2:
-    - product y unit deben pertenecer al usuario.
-    - purchase_list se toma de la URL (read_only) y la inyecta la vista.
-    - Si unit.is_currency=True: qty es importe y price_soles se fuerza a None.
-    - Si NO es monetaria: en borrador price_soles puede ser None, en final es requerido.
+    PATCH del Historial:
+    - Acepta 'price' (o 'price_soles') y lo mapea a price_soles (cuando la unidad NO es monetaria).
+      Si la unidad ES monetaria, se fuerza price_soles = None (el importe va en qty).
+    - Acepta 'quantity' (o 'qty') y lo mapea a qty.
+    - Acepta 'notes' u 'observations' si existen en el modelo.
     """
-    # Campos de ayuda para el frontend (solo lectura)
-    product_name = serializers.SerializerMethodField(read_only=True)
-    unit_name = serializers.SerializerMethodField(read_only=True)
-    unit_is_currency = serializers.SerializerMethodField(read_only=True)
-    subtotal_soles = serializers.SerializerMethodField(read_only=True)
-
-    unit_symbol = serializers.SerializerMethodField(read_only=True)
+    # Campos que puede mandar el front (solo entrada)
+    price = serializers.CharField(required=False, allow_null=True, write_only=True)
+    quantity = serializers.CharField(required=False, allow_null=True, write_only=True)
+    notes = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    observations = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = PurchaseListItem
-        fields = (
-            "id",
-            "purchase_list",
-            "product", "product_name",
-            "unit", "unit_name", "unit_is_currency","unit_symbol",
-            "qty",
-            "price_soles",
-            "subtotal_soles",
-        )
-        read_only_fields = ("purchase_list",)  # <- **clave**
-        extra_kwargs = {
-            "price_soles": {"required": False, "allow_null": True},
-        }
+        # Solo entrada: devolvemos 200 con un cuerpo mínimo; el frontend hace luego un GET de refresco
+        fields = ['price', 'quantity', 'notes', 'observations']
 
-    # Limitar querysets en escritura según el usuario
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        user = _get_request_user(self)
-        if user and user.is_authenticated:
-            self.fields["product"].queryset = Product.objects.filter(owner=user)
-            self.fields["unit"].queryset = Unit.objects.filter(owner=user)
-            # purchase_list es read_only; no necesitamos queryset aquí
-        else:
-            self.fields["product"].queryset = Product.objects.none()
-            self.fields["unit"].queryset = Unit.objects.none()
+    # ── Normaliza alias del payload → claves esperadas por este serializer
+    def to_internal_value(self, data):
+        d = dict(data)
+        if 'price' not in d and 'price_soles' in d:
+            d['price'] = d.get('price_soles')
+        if 'quantity' not in d and 'qty' in d:
+            d['quantity'] = d.get('qty')
+        if 'notes' not in d and 'observations' in d:
+            d['notes'] = d.get('observations')
 
-    # ------- Getters de solo lectura -------
-    def get_product_name(self, obj):
-        return getattr(obj.product, "name", None)
+        allowed = {'price', 'quantity', 'notes', 'observations'}
+        cleaned = {k: d.get(k) for k in allowed if k in d}
+        return super().to_internal_value(cleaned)
 
-    def get_unit_name(self, obj):
-        return getattr(obj.unit, "name", None)
-
-    def get_unit_symbol(self, obj):
-        return getattr(obj.unit, "symbol", None)
-
-    def get_unit_is_currency(self, obj):
-        return bool(getattr(obj.unit, "is_currency", False))
-
-    def get_subtotal_soles(self, obj):
-        """
-        Si la unidad es monetaria (S/), el subtotal es la cantidad (importe).
-        Si no, subtotal = qty * price_soles. Devuelve Decimal a 2dp.
-        """
+    # ── Validaciones/parseo números: deja None si viene null/''; si viene número, a Decimal
+    def validate_price(self, value):
+        if value in (None, ''):
+            return None
         try:
-            is_currency = bool(getattr(obj.unit, "is_currency", False))
-            q = obj.qty or Decimal("0")
-            if is_currency:
-                return _dec2(q)
-            p = obj.price_soles or Decimal("0")
-            return _dec2(q * p)
-        except Exception:
-            return Decimal("0.00")
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            raise serializers.ValidationError("Formato de precio inválido.")
 
-    # ------- Validación V2 -------
-    def validate(self, attrs):
-        from .models import Unit as UnitModel, PurchaseList as PurchaseListModel, Product as ProductModel
+    def validate_quantity(self, value):
+        if value in (None, ''):
+            return None
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            raise serializers.ValidationError("Formato de cantidad inválido.")
 
-        user = _get_request_user(self)
-        if not user or not user.is_authenticated:
-            raise serializers.ValidationError("No autenticado.")
+    def update(self, instance, validated_data):
+        touched = []
+        is_currency = bool(getattr(instance.unit, 'is_currency', False))
 
-        # purchase_list llega por contexto o por la instancia (nunca por attrs porque es read_only)
-        pl = (
-            attrs.get("purchase_list")
-            or getattr(self.instance, "purchase_list", None)
-            or (self.context.get("purchase_list") if self.context else None)
-        )
+        # quantity → qty
+        if 'quantity' in validated_data and validated_data['quantity'] is not None:
+            instance.qty = validated_data['quantity']
+            touched.append('qty')
 
-        unit = attrs.get("unit") or getattr(self.instance, "unit", None)
-        product = attrs.get("product") or getattr(self.instance, "product", None)
-        qty  = attrs.get("qty") if "qty" in attrs else getattr(self.instance, "qty", None)
-        price = attrs.get("price_soles") if "price_soles" in attrs else getattr(self.instance, "price_soles", None)
-
-        # Existencia y tipos
-        if not isinstance(unit, UnitModel):
-            raise serializers.ValidationError({"unit": "Unidad inválida."})
-        if not isinstance(product, ProductModel):
-            raise serializers.ValidationError({"product": "Producto inválido."})
-        if pl is None or not isinstance(pl, PurchaseListModel):
-            raise serializers.ValidationError({"purchase_list": "Lista inválida o ausente."})
-        if qty is None:
-            raise serializers.ValidationError({"qty": "Cantidad requerida."})
-
-        # Pertenencia al usuario
-        if getattr(unit, "owner_id", None) != user.id:
-            raise serializers.ValidationError({"unit": "No pertenece al usuario."})
-        if getattr(product, "owner_id", None) != user.id:
-            raise serializers.ValidationError({"product": "No pertenece al usuario."})
-        if getattr(pl, "created_by_id", None) != user.id:
-            raise serializers.ValidationError({"purchase_list": "No pertenece al usuario."})
-
-        # Estado de la lista
-        if pl.status == "final":
-            raise serializers.ValidationError({"purchase_list": "No se pueden modificar listas finalizadas."})
-
-        # Reglas de precio/importe
-        if unit.is_currency:
-            # qty = importe; normalizamos price_soles a None
-            attrs["price_soles"] = None
+        # price → price_soles (solo si NO es monetaria); si es monetaria, se fuerza a None siempre
+        if is_currency:
+            # importe va en qty; el precio unitario se borra
+            if getattr(instance, 'price_soles', None) is not None:
+                instance.price_soles = None
+                touched.append('price_soles')
         else:
-            if qty < 0:
-                raise serializers.ValidationError({"qty": "Debe ser mayor o igual a cero."})
-            if price is not None:
-                try:
-                    Decimal(str(price))
-                except Exception:
-                    raise serializers.ValidationError({"price_soles": "Formato inválido."})
-            if pl.status == "final" and price is None:
-                raise serializers.ValidationError({
-                    "price_soles": "Requerido al finalizar la lista (unidad no monetaria)."
-                })
+            if 'price' in validated_data:
+                # Puede venir None para “limpiar” el precio en borrador
+                instance.price_soles = validated_data['price']
+                touched.append('price_soles')
 
-        return attrs
+        # notas / observaciones (si el modelo las tuviera)
+        text = validated_data.get('notes', None)
+        if text is not None:
+            if hasattr(instance, 'notes'):
+                instance.notes = text
+                touched.append('notes')
+            elif hasattr(instance, 'observations'):
+                instance.observations = text
+                touched.append('observations')
+
+        if touched:
+            instance.save(update_fields=touched)
+        return instance
+
 
 
 class PurchaseListSerializer(serializers.ModelSerializer):
