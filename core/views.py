@@ -210,6 +210,19 @@ def _collect_multi(request, *keys: str):
     return dedup
 # ========================================================================
 
+class PurchaseListItemViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = PurchaseListItem.objects.select_related(
+        'product__category', 'unit', 'purchase_list'
+    )
+    serializer_class = PurchaseListItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        pl = self.request.query_params.get('purchase_list')
+        if pl:
+            qs = qs.filter(purchase_list_id=pl)
+        return qs
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
