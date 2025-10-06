@@ -358,40 +358,69 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     # ---------- Acciones ----------
     @action(detail=True, methods=['post'], url_path='finalize')
     def finalize(self, request, pk=None):
+        """Finaliza una lista solo si todos los ítems no monetarios tienen precio."""
         pl = self.get_object()
-        if pl.status == 'final':
-            return Response({'detail': 'Ya estaba finalizada.'}, status=200)
-        pl.notes = request.data.get('notes', '') or pl.notes
-        pl.status = 'final'
+        if pl.status == "final":
+            return Response({"detail": "La lista ya está finalizada."}, status=400)
+        try:
+            self._ensure_complete_prices(pl)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        pl.status = "final"
         pl.finalized_at = timezone.now()
-        pl.save(update_fields=['notes', 'status', 'finalized_at'])
-        return Response(PurchaseListSerializer(pl, context={'request': request}).data)
+        if not pl.series_code:
+            try:
+                from .services.serials import next_series_code
+                pl.series_code = next_series_code(pl.restaurant)
+            except Exception:
+                try:
+                    from .services import generate_series_code
+                    pl.series_code = generate_series_code(pl.restaurant)
+                except Exception:
+                    pl.series_code = f"{timezone.now().year}-{pl.restaurant.code}-{pl.id:04d}"
 
+        pl.save(update_fields=["status", "finalized_at", "series_code"])
+        return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
 
-        @action(detail=True, methods=['get'], url_path='items', permission_classes=[IsAuthenticated])
-        def list_items(self, request, pk=None):
-            """
-            GET /api/purchase-lists/<id>/items/
-            Devuelve SOLO los ítems de esa lista.
-            """
-            pl = self.get_object()  # scope por usuario
-            qs = (pl.items
-                    .select_related('product__category', 'unit')
-                    .order_by('id'))
-            data = PurchaseListItemSerializer(qs, many=True, context={'request': request}).data
-            return Response(data, status=200)
+    @action(detail=True, methods=['get'], url_path='items')
+    def list_items(self, request, pk=None):
+        """Listar ítems de la lista (para completar precios)."""
+        pl = self.get_object()  # ya scoping por usuario
+        qs = pl.items.select_related('product__category', 'unit').all()
+        data = PurchaseListItemSerializer(qs, many=True, context={'request': request}).data
+        return Response(data)
 
 
     @action(detail=True, methods=['post'], url_path='items')
     def add_item(self, request, pk=None):
+        """Agregar ítem a la lista (builder)."""
         pl = self.get_object()
-        serializer = PurchaseListItemSerializer(
-            data=request.data,
+        if pl.status == "final":
+            return Response({"detail": "No se pueden editar listas finalizadas."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data.copy()
+        # No confíes en purchase_list del body
+        data.pop('purchase_list', None)
+
+        # ⬇⬇⬇ **cambio clave**: pasamos request y la instancia de la lista en el contexto
+        ser = PurchaseListItemSerializer(
+            data=data,
             context={"request": request, "purchase_list": pl}
         )
-        serializer.is_valid(raise_exception=True)
-        obj = serializer.save(purchase_list=pl)  # <-- asegura FK
-        return Response(PurchaseListItemSerializer(obj, context={"request": request}).data, status=201)
+
+        if not ser.is_valid():
+            return Response(ser.errors, status=400)
+
+        try:
+            obj = ser.save(purchase_list=pl)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+        except Exception as e:
+            return Response({"detail": f"No se pudo guardar el ítem: {e}"}, status=400)
+
+        return Response(PurchaseListItemSerializer(obj).data, status=201)
 
     @action(detail=True, methods=['post'], url_path='complete')
     def complete(self, request, pk=None):
@@ -755,21 +784,3 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
         resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
-
-class PurchaseListItemViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = PurchaseListItemSerializer
-    http_method_names = ['get','patch','head','options']
-
-    def get_queryset(self):
-        qs = (PurchaseListItem.objects
-              .select_related('product__category', 'unit', 'purchase_list__restaurant')
-              .filter(purchase_list__created_by=self.request.user)
-              .order_by('id'))
-        pl = self.request.query_params.get('purchase_list') or self.request.query_params.get('purchase_list_id')
-        if pl is not None:
-            try:
-                qs = qs.filter(purchase_list_id=int(pl))
-            except ValueError:
-                qs = qs.none()
-        return qs
