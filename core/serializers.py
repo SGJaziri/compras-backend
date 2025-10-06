@@ -34,7 +34,6 @@ def _to_decimal_or_zero(v):
     if isinstance(v, Decimal):
         return v
     try:
-        # Evita binarios float: casteo por str
         return Decimal(str(v))
     except (InvalidOperation, ValueError, TypeError):
         return Decimal('0')
@@ -128,8 +127,12 @@ class PurchaseSerializer(serializers.ModelSerializer):
     items = PurchaseItemSerializer(many=True, read_only=True)
 
     class Meta:
-        model = Purchase
-        fields = ("id", "restaurant", "serial", "issue_date", "notes", "total_amount", "items")
+        model = PurchaseListItem
+        fields = ['price', 'quantity']            # <- sólo lo que edita el modal
+        extra_kwargs = {
+            'price': {'required': False, 'allow_null': True},
+            'quantity': {'required': False},
+        }
 
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
