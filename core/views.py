@@ -261,6 +261,9 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
+    queryset = PurchaseList.objects.all()
+    serializer_class = PurchaseListSerializer
+    permission_classes = [IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
         """Crea lista; si hay una lista *draft* vacía reciente para el mismo restaurante, la reutiliza."""
@@ -283,6 +286,42 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                     ser = self.get_serializer(existing)
                     return Response(ser.data, status=200)
         return super().create(request, *args, **kwargs)
+
+    def _ensure_series_code(self, pl: PurchaseList):
+        """Asigna series_code si está vacío."""
+        if pl.series_code:
+            return
+        prefix = (pl.restaurant.code or (pl.restaurant.name or "SIN")[:3]).upper()
+        # EJ: 2025-ALP-0069  (a partir del id)
+        pl.series_code = f"{timezone.now().date().year}-{prefix}-{pl.id:04d}"
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        pl = self.get_object()
+
+        if pl.created_by_id != request.user.id:
+            return Response({'detail': 'No permitido'}, status=status.HTTP_403_FORBIDDEN)
+        if pl.status == 'final':
+            return Response({'ok': True, 'status': 'final'}, status=status.HTTP_200_OK)
+
+        items = pl.items.select_related('unit').all()
+        if not items.exists():
+            return Response({'detail': 'La lista no tiene ítems.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        missing = [it.id for it in items
+                   if not getattr(it.unit, 'is_currency', False) and it.price_soles is None]
+        if missing:
+            return Response({'detail': 'Hay ítems sin precio.', 'missing_item_ids': missing},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            pl.status = 'final'
+            pl.finalized_at = timezone.now()
+            # Asegura series_code
+            self._ensure_series_code(pl)
+            pl.save(update_fields=['status', 'finalized_at', 'series_code'])
+
+        return Response({'ok': True, 'status': pl.status, 'series_code': pl.series_code}, status=status.HTTP_200_OK)
 
     """
     Requiere autenticación.
