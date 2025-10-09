@@ -275,6 +275,40 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                     return Response(ser.data, status=200)
         return super().create(request, *args, **kwargs)
 
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        pl = self.get_object()
+
+        # Solo el dueño puede finalizar
+        if pl.created_by_id != request.user.id:
+            return Response({'detail': 'No permitido'}, status=status.HTTP_403_FORBIDDEN)
+
+        if pl.status == 'final':
+            return Response({'ok': True, 'status': 'final'}, status=status.HTTP_200_OK)
+
+        # Debe tener ítems
+        items = pl.items.select_related('unit').all()
+        if not items.exists():
+            return Response({'detail': 'La lista no tiene ítems.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Verificar precios en unidades NO monetarias
+        faltantes = [it.id for it in items
+                     if not getattr(it.unit, 'is_currency', False) and it.price_soles is None]
+
+        if faltantes:
+            return Response({
+                'detail': 'Hay ítems sin precio.',
+                'missing_item_ids': faltantes,
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Finalizar
+        pl.status = 'final'
+        pl.finalized_at = timezone.now()
+        pl.save(update_fields=['status', 'finalized_at'])
+
+        return Response({'ok': True, 'status': pl.status}, status=status.HTTP_200_OK)
+
     """
     Requiere autenticación.
     El queryset siempre se filtra por created_by=request.user.
