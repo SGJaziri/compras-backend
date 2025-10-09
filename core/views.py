@@ -222,7 +222,7 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
         'product__category', 'unit', 'purchase_list'
     )
     permission_classes = [IsAuthenticated]
-    http_method_names = ['get', 'patch', 'head', 'options']  # solo Historial
+    http_method_names = ['get', 'patch', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -240,15 +240,24 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
         kwargs['partial'] = True
         instance = self.get_object()
 
-        # 1) validar/actualizar con el serializer de PATCH
+        # 1) actualizar el ítem con el serializer de PATCH
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
-        # 2) responder con el serializer completo para que el front se refresque sin cambios
+        # 2) si la lista no es final, verificar si ya no quedan ítems sin precio
+        pl = instance.purchase_list
+        if pl.status != 'final':
+            # ¿existe algún ítem NO monetario sin precio?
+            falta = pl.items.filter(unit__is_currency=False, price_soles__isnull=True).exists()
+            if not falta:
+                pl.status = 'final'
+                pl.finalized_at = timezone.now()
+                pl.save(update_fields=['status', 'finalized_at'])
+
+        # 3) responder con el serializer completo
         full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
         return Response(full.data)
-
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
@@ -824,36 +833,3 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
         return resp
     
-    @action(detail=True, methods=['post'])
-    def complete(self, request, pk=None):
-        pl = self.get_object()
-
-        # Solo el dueño puede finalizar
-        if pl.created_by_id != request.user.id:
-            return Response({'detail': 'No permitido'}, status=status.HTTP_403_FORBIDDEN)
-
-        if pl.status == 'final':
-            return Response({'ok': True, 'status': 'final'}, status=status.HTTP_200_OK)
-
-        # Debe tener ítems
-        items = pl.items.select_related('unit').all()
-        if not items.exists():
-            return Response({'detail': 'La lista no tiene ítems.'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        # Verificar precios en unidades NO monetarias
-        faltantes = [it.id for it in items
-                     if not getattr(it.unit, 'is_currency', False) and it.price_soles is None]
-
-        if faltantes:
-            return Response({
-                'detail': 'Hay ítems sin precio.',
-                'missing_item_ids': faltantes,
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Finalizar
-        pl.status = 'final'
-        pl.finalized_at = timezone.now()
-        pl.save(update_fields=['status', 'finalized_at'])
-
-        return Response({'ok': True, 'status': pl.status}, status=status.HTTP_200_OK)
