@@ -285,7 +285,56 @@ class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
             instance.save(update_fields=touched)
         return instance
 
+class PurchaseListItemSerializer(serializers.ModelSerializer):
+    """
+    Para listar/crear/editar ítems de la lista desde el builder.
+    Campos de solo lectura para el front.
+    """
+    product_name = serializers.SerializerMethodField(read_only=True)
+    unit_name = serializers.SerializerMethodField(read_only=True)
+    unit_is_currency = serializers.SerializerMethodField(read_only=True)
+    unit_symbol = serializers.SerializerMethodField(read_only=True)
+    subtotal_soles = serializers.SerializerMethodField(read_only=True)
 
+    class Meta:
+        model = PurchaseListItem
+        fields = (
+            "id",
+            "purchase_list",
+            "product", "product_name",
+            "unit", "unit_name", "unit_is_currency", "unit_symbol",
+            "qty",
+            "price_soles",
+            "subtotal_soles",
+        )
+        read_only_fields = ("purchase_list",)
+        extra_kwargs = {"price_soles": {"required": False, "allow_null": True}}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = _get_request_user(self)
+        if user and user.is_authenticated:
+            self.fields["product"].queryset = Product.objects.filter(owner=user)
+            self.fields["unit"].queryset = Unit.objects.filter(owner=user)
+        else:
+            self.fields["product"].queryset = Product.objects.none()
+            self.fields["unit"].queryset = Unit.objects.none()
+
+    def get_product_name(self, obj): return getattr(obj.product, "name", None)
+    def get_unit_name(self, obj):    return getattr(obj.unit, "name", None)
+    def get_unit_symbol(self, obj):  return getattr(obj.unit, "symbol", None)
+    def get_unit_is_currency(self, obj): return bool(getattr(obj.unit, "is_currency", False))
+
+    def get_subtotal_soles(self, obj):
+        try:
+            is_currency = bool(getattr(obj.unit, "is_currency", False))
+            q = obj.qty or Decimal("0")
+            if is_currency:
+                return _dec2(q)
+            p = obj.price_soles or Decimal("0")
+            return _dec2(q * p)
+        except Exception:
+            return Decimal("0.00")
 
 class PurchaseListSerializer(serializers.ModelSerializer):
     items = PurchaseListItemSerializer(many=True, read_only=True)
