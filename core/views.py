@@ -369,53 +369,54 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             if names:
                 items_qs = items_qs.filter(product__category__name__in=names)
 
-                groups_map = {}   # {category_name: [line, ...]}
-                grand_total = Decimal("0.00")
+        # --- Construcción del PDF (ahora SIEMPRE se ejecuta) ---
+        groups_map = {}   # {category_name: [line, ...]}
+        grand_total = Decimal("0.00")
 
-                for it in items_qs:
-                    cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
+        for it in items_qs:
+            cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
 
-                    price = (it.price_soles or Decimal("0"))
-                    qty   = (it.qty or Decimal("0"))
-                    raw_subtotal = qty if (getattr(it.unit, "is_currency", False)) else (qty * price)
-                    subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            price = (it.price_soles or Decimal("0"))
+            qty   = (it.qty or Decimal("0"))
+            raw_subtotal = qty if (getattr(it.unit, "is_currency", False)) else (qty * price)
+            subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-                    grand_total += subtotal
+            grand_total += subtotal
 
-                    ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
+            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
 
-                    line = {
-                        "product": it.product.name,
-                        "unit": ulabel,
-                        "qty": float(qty),
-                        "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
-                                else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                        "subtotal": float(subtotal),
-                        "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
-                    }
-                    groups_map.setdefault(cat, []).append(line)
+            line = {
+                "product": it.product.name,
+                "unit": ulabel,
+                "qty": float(qty),
+                "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
+                        else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                "subtotal": float(subtotal),
+                "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
+            }
+            groups_map.setdefault(cat, []).append(line)
 
-                # Normalizar a lista ordenada
-                groups = []
-                flat_lines = []
-                for cat_name in sorted(groups_map.keys(), key=lambda s: (s is None, s)):
-                    lines = groups_map[cat_name]
-                    flat_lines.extend(lines)
-                    group_total_dec = sum(Decimal(str(l["subtotal"])) for l in lines)
-                    group_total = float(group_total_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-                    groups.append({"category": cat_name, "lines": lines, "group_total": group_total})
+        # Normalizar a lista ordenada
+        groups = []
+        flat_lines = []
+        for cat_name in sorted(groups_map.keys(), key=lambda s: (s is None, s)):
+            lines = groups_map[cat_name]
+            flat_lines.extend(lines)
+            group_total_dec = sum(Decimal(str(l["subtotal"])) for l in lines)
+            group_total = float(group_total_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            groups.append({"category": cat_name, "lines": lines, "group_total": group_total})
 
-                ctx = {
-                    "pl": pl,
-                    "groups": groups,
-                    "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-                    "lines": flat_lines,
-                    "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-                    "show_prices": show_prices,
-                    "observation": (pl.observation or ""),
-                }
-                html = render_to_string("purchase_list.html", ctx)
-                return html
+        ctx = {
+            "pl": pl,
+            "groups": groups,
+            "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
+            "lines": flat_lines,
+            "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
+            "show_prices": show_prices,
+            "observation": (pl.observation or ""),
+        }
+        html = render_to_string("purchase_list.html", ctx)
+        return html
 
     def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
         html = self._render_pdf_html(
