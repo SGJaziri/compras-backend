@@ -488,23 +488,23 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return b"%PDF-1.4\n%"  # <--- dummy PDF mínimo, evita Response() JSON
 
     def _next_series_code(self, restaurant):
-        # Código base del restaurante (code -> name -> 'SIN')
-        base = (getattr(restaurant, "code", None) or getattr(restaurant, "name", None) or "SIN").strip()
-        code = "".join(ch for ch in base.upper() if ch.isalnum())[:3] or "SIN"
-
+        base = (getattr(restaurant, "code", None) or getattr(restaurant, "name", None) or "GEN").strip()
+        code = "".join(ch for ch in base.upper() if ch.isalnum())[:3] or "GEN"
         today = timezone.localdate()
-        prefix = f"{today.strftime('%Y%m')}-{code}-"   # ej: 202510-ALP-
+        prefix = f"{today.strftime('%Y%m')}-{code}-"
 
-        last = (PurchaseList.objects
-                .filter(restaurant=restaurant, series_code__startswith=prefix)
-                .order_by('series_code')
-                .last())
+        last = (
+            PurchaseList.objects
+            .filter(restaurant=restaurant, series_code__startswith=prefix)
+            .order_by("series_code")
+            .last()
+        )
 
         last_n = 0
         if last and last.series_code:
             try:
                 last_n = int(str(last.series_code).rsplit("-", 1)[-1])
-            except Exception:
+            except ValueError:
                 last_n = 0
 
         return f"{prefix}{last_n + 1:04d}"
@@ -512,22 +512,20 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     # ---------- Acciones ----------
     @action(detail=True, methods=['post'], url_path='finalize')
     def finalize(self, request, pk=None):
-        """Finaliza una lista solo si todos los ítems no monetarios tienen precio."""
         pl = self.get_object()
-        if pl.status == "final":
-            return Response({"detail": "La lista ya está finalizada."}, status=400)
-        try:
-            self._ensure_complete_prices(pl)
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
 
-        pl.status = "final"
-        pl.finalized_at = timezone.now()
+        # Aseguramos que siempre tenga código de serie antes de guardar
         if not pl.series_code:
             pl.series_code = self._next_series_code(pl.restaurant)
 
-        pl.save(update_fields=["status", "finalized_at", "series_code"])
-        return Response({"detail": "Lista finalizada.", "id": pl.id, "series_code": pl.series_code}, status=200)
+        pl.status = "final"
+        pl.finalized_at = timezone.now()
+
+        # ⚠️ Asegúrate de incluir series_code en los update_fields
+        pl.save(update_fields=["series_code", "status", "finalized_at"])
+
+        serializer = PurchaseListSerializer(pl, context={"request": request})
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='items')
     def list_items(self, request, pk=None):
