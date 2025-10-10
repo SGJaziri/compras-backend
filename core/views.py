@@ -617,34 +617,35 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         )
 
     # ---------- PDF por lista ----------
-    @action(detail=True, methods=['get'], url_path='pdf', renderer_classes=[PDFRenderer], content_negotiation_class=IgnoreClientContentNegotiation)
+    @action(detail=True, methods=['get'], url_path='pdf',renderer_classes=[PDFRenderer],content_negotiation_class=IgnoreClientContentNegotiation)
     def pdf(self, request, pk=None):
         pl = self.get_object()
+
         hide_param = (request.query_params.get("hide_prices") or "").strip().lower()
         show_prices = hide_param not in ("1", "true", "yes")
 
-        cats_ids = request.query_params.get("category_ids") or request.query_params.get("categories") or ""
-        cats_names = request.query_params.get("category_names") or ""
-        cat_ids = [x.strip() for x in str(cats_ids).split(",") if x.strip()]
-        cat_names = [x.strip() for x in str(cats_names).split(",") if x.strip()]
+        cat_ids = request.query_params.get("category_ids") or request.query_params.get("categories") or ""
+        cat_names = request.query_params.get("category_names") or ""
+        cat_ids = [x.strip() for x in str(cat_ids).split(",") if x.strip()]
+        cat_names = [x.strip() for x in str(cat_names).split(",") if x.strip()]
 
         try:
             pdf_bytes = self._render_pdf_bytes(
                 request, pl, show_prices=show_prices,
-                category_ids=cat_ids or None,
-                category_names=cat_names or None,
+                category_ids=cat_ids or None, category_names=cat_names or None
             )
         except Exception:
-            pdf_bytes = b"%PDF-1.4\n%"  # <- fallback duro aquí también
+            pdf_bytes = None
 
         if not pdf_bytes:
-            pdf_bytes = b"%PDF-1.4\n%"  # seguridad extra
+            # dummy pdf mínimo — evita que DRF/edge creen JSON y activen 406
+            pdf_bytes = b"%PDF-1.4\n%"
 
         serie = pl.series_code or f"lista-{pl.pk}"
         safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in f"{serie}.pdf")
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+        resp["Content-Disposition"] = f'attachment; filename=\"{safe_name}\"'
         resp["X-Content-Type-Options"] = "nosniff"
         resp["Cache-Control"] = "no-store"
         resp["Content-Length"] = str(len(pdf_bytes))
