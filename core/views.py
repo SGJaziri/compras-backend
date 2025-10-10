@@ -253,9 +253,26 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
             # ¿existe algún ítem NO monetario sin precio?
             falta = pl.items.filter(unit__is_currency=False, price_soles__isnull=True).exists()
             if not falta:
+                # asignar serie si falta
+                if not pl.series_code:
+                    rest_code = (pl.restaurant.code or 'SIN').upper() if pl.restaurant else 'SIN'
+                    year = pl.created_at.year if pl.created_at else timezone.now().year
+                    prefix = f"{year}-{rest_code}-"
+                    last = (PurchaseList.objects
+                            .filter(series_code__startswith=prefix)
+                            .aggregate(m=Max('series_code'))['m'])
+                    if last:
+                        try:
+                            last_n = int(last.rsplit('-', 1)[-1])
+                        except Exception:
+                            last_n = 0
+                    else:
+                        last_n = 0
+                    pl.series_code = f"{prefix}{last_n + 1:04d}"
+
                 pl.status = 'final'
                 pl.finalized_at = timezone.now()
-                pl.save(update_fields=['status', 'finalized_at'])
+                pl.save(update_fields=['series_code', 'status', 'finalized_at'])
 
         # 3) responder con el serializer completo
         full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
@@ -488,10 +505,12 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return b"%PDF-1.4\n%"  # <--- dummy PDF mínimo, evita Response() JSON
 
     def _next_series_code(self, restaurant):
+        # Usa code si existe; si no, deriva 3 letras del nombre; si no, GEN
         base = (getattr(restaurant, "code", None) or getattr(restaurant, "name", None) or "GEN").strip()
         code = "".join(ch for ch in base.upper() if ch.isalnum())[:3] or "GEN"
+
         today = timezone.localdate()
-        prefix = f"{today.strftime('%Y%m')}-{code}-"
+        prefix = f"{today.strftime('%Y%m')}-{code}-"   # p. ej. 202510-ALP-
 
         last = (
             PurchaseList.objects
@@ -499,12 +518,11 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             .order_by("series_code")
             .last()
         )
-
         last_n = 0
         if last and last.series_code:
             try:
                 last_n = int(str(last.series_code).rsplit("-", 1)[-1])
-            except ValueError:
+            except Exception:
                 last_n = 0
 
         return f"{prefix}{last_n + 1:04d}"
@@ -514,18 +532,15 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     def finalize(self, request, pk=None):
         pl = self.get_object()
 
-        # Aseguramos que siempre tenga código de serie antes de guardar
         if not pl.series_code:
             pl.series_code = self._next_series_code(pl.restaurant)
 
         pl.status = "final"
         pl.finalized_at = timezone.now()
+        pl.save(update_fields=["series_code", "status", "finalized_at", "updated_at"])
 
-        # ⚠️ Asegúrate de incluir series_code en los update_fields
-        pl.save(update_fields=["series_code", "status", "finalized_at"])
-
-        serializer = PurchaseListSerializer(pl, context={"request": request})
-        return Response(serializer.data)
+        ser = PurchaseListSerializer(pl, context={"request": request})
+        return Response(ser.data)
 
     @action(detail=True, methods=['get'], url_path='items')
     def list_items(self, request, pk=None):
@@ -626,6 +641,23 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='pdf',renderer_classes=[PDFRenderer],content_negotiation_class=PassthroughNegotiation,)
     def pdf(self, request, pk=None):
         pl = self.get_object()
+
+        if pl.status == 'final' and not pl.series_code:
+            rest_code = (pl.restaurant.code or 'SIN').upper() if pl.restaurant else 'SIN'
+            year = pl.created_at.year if pl.created_at else timezone.now().year
+            prefix = f"{year}-{rest_code}-"
+            last = (PurchaseList.objects
+                    .filter(series_code__startswith=prefix)
+                    .aggregate(m=Max('series_code'))['m'])
+            if last:
+                try:
+                    last_n = int(last.rsplit('-', 1)[-1])
+                except Exception:
+                    last_n = 0
+            else:
+                last_n = 0
+            pl.series_code = f"{prefix}{last_n + 1:04d}"
+            pl.save(update_fields=['series_code', 'updated_at'])
 
         hide_param = (request.query_params.get("hide_prices") or "").strip().lower()
         show_prices = hide_param not in ("1", "true", "yes")
