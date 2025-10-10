@@ -7,7 +7,7 @@ from django.db.models.deletion import ProtectedError
 from django.db import IntegrityError
 
 from rest_framework import viewsets, permissions, status, renderers
-from rest_framework.negotiation import IgnoreClientContentNegotiation
+from rest_framework.negotiation import BaseContentNegotiation
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -266,11 +266,19 @@ class PDFRenderer(renderers.BaseRenderer):
     format = "pdf"
     charset = None
     render_style = "binary"
-
     def render(self, data, accepted_media_type=None, renderer_context=None):
-        # Como devolvemos HttpResponse, DRF realmente no usará este render,
-        # pero su sola presencia satisface la negociación del Accept.
+        # Normalmente devolvemos HttpResponse con bytes PDF;
+        # DRF no usa esto, pero su presencia satisface la negociación.
         return data
+
+class PassthroughNegotiation(BaseContentNegotiation):
+    """
+    Ignora el header Accept del cliente y usa el primer renderer declarado.
+    Equivalente práctico a IgnoreClientContentNegotiation para esta acción.
+    """
+    def select_renderer(self, request, renderers, format_suffix=None):
+        renderer = renderers[0]
+        return (renderer, renderer.media_type)
 
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
@@ -617,7 +625,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         )
 
     # ---------- PDF por lista ----------
-    @action(detail=True, methods=['get'], url_path='pdf',renderer_classes=[PDFRenderer],content_negotiation_class=IgnoreClientContentNegotiation)
+    @action(detail=True, methods=['get'], url_path='pdf',renderer_classes=[PDFRenderer],content_negotiation_class=PassthroughNegotiation,)
     def pdf(self, request, pk=None):
         pl = self.get_object()
 
