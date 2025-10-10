@@ -296,6 +296,30 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         # EJ: 2025-ALP-0069  (a partir del id)
         pl.series_code = f"{timezone.now().date().year}-{prefix}-{pl.id:04d}"
 
+    def next_series_code(restaurant):
+        """
+        Genera series por restaurante y mes, p.ej.: REST-202510-0001
+        Coincide con el patrón usado ya en el fallback del ViewSet.
+        """
+        today = timezone.localdate()
+        period = today.strftime('%Y%m')
+        prefix = f"{restaurant.code}-{period}-"
+
+        last = (
+            PurchaseList.objects
+            .filter(restaurant=restaurant, series_code__startswith=prefix)
+            .order_by('series_code')
+            .last()
+        )
+        last_seq = 0
+        if last and last.series_code:
+            try:
+                last_seq = int(str(last.series_code).split('-')[-1])
+            except Exception:
+                last_seq = 0
+
+        return f"{prefix}{last_seq + 1:04d}"
+
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         pl = self.get_object()
