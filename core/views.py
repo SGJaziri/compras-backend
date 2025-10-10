@@ -6,7 +6,8 @@ from django.db.models import Max
 from django.db.models.deletion import ProtectedError
 from django.db import IntegrityError
 
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, renderers
+from rest_framework.negotiation import IgnoreClientContentNegotiation
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -260,6 +261,17 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
         full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
         return Response(full.data)
 
+class PDFRenderer(renderers.BaseRenderer):
+    media_type = "application/pdf"
+    format = "pdf"
+    charset = None
+    render_style = "binary"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        # Como devolvemos HttpResponse, DRF realmente no usará este render,
+        # pero su sola presencia satisface la negociación del Accept.
+        return data
+
 # --------------- Listas (aisladas por usuario) ---------------
 class PurchaseListViewSet(viewsets.ModelViewSet):
     queryset = PurchaseList.objects.all()
@@ -468,22 +480,26 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         return b"%PDF-1.4\n%"  # <--- dummy PDF mínimo, evita Response() JSON
 
     def _next_series_code(self, restaurant):
+        # Código base del restaurante (code -> name -> 'SIN')
+        base = (getattr(restaurant, "code", None) or getattr(restaurant, "name", None) or "SIN").strip()
+        code = "".join(ch for ch in base.upper() if ch.isalnum())[:3] or "SIN"
+
         today = timezone.localdate()
-        period = today.strftime('%Y%m')
-        prefix = f"{restaurant.code}-{period}-"
-        last = (
-            PurchaseList.objects
-            .filter(restaurant=restaurant, series_code__startswith=prefix)
-            .order_by('series_code')
-            .last()
-        )
-        last_seq = 0
+        prefix = f"{today.strftime('%Y%m')}-{code}-"   # ej: 202510-ALP-
+
+        last = (PurchaseList.objects
+                .filter(restaurant=restaurant, series_code__startswith=prefix)
+                .order_by('series_code')
+                .last())
+
+        last_n = 0
         if last and last.series_code:
             try:
-                last_seq = int(str(last.series_code).split('-')[-1])
+                last_n = int(str(last.series_code).rsplit("-", 1)[-1])
             except Exception:
-                last_seq = 0
-        return f"{prefix}{last_seq + 1:04d}"
+                last_n = 0
+
+        return f"{prefix}{last_n + 1:04d}"
 
     # ---------- Acciones ----------
     @action(detail=True, methods=['post'], url_path='finalize')
@@ -601,7 +617,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         )
 
     # ---------- PDF por lista ----------
-    @action(detail=True, methods=['get'], url_path='pdf')
+    @action(detail=True, methods=['get'], url_path='pdf', renderer_classes=[PDFRenderer], content_negotiation_class=IgnoreClientContentNegotiation)
     def pdf(self, request, pk=None):
         pl = self.get_object()
         hide_param = (request.query_params.get("hide_prices") or "").strip().lower()
