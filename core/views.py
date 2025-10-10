@@ -2,6 +2,7 @@ from django.utils import timezone
 from django.template.loader import render_to_string
 from django.http import HttpResponse
 
+from django.db.models import Max
 from django.db.models.deletion import ProtectedError
 from django.db import IntegrityError
 
@@ -308,20 +309,42 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         if not items.exists():
             return Response({'detail': 'La lista no tiene ítems.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        missing = [it.id for it in items
-                   if not getattr(it.unit, 'is_currency', False) and it.price_soles is None]
-        if missing:
-            return Response({'detail': 'Hay ítems sin precio.', 'missing_item_ids': missing},
+        faltantes = [it.id for it in items
+                    if not getattr(it.unit, 'is_currency', False) and it.price_soles is None]
+        if faltantes:
+            return Response({'detail': 'Hay ítems sin precio.', 'missing_item_ids': faltantes},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        with transaction.atomic():
-            pl.status = 'final'
-            pl.finalized_at = timezone.now()
-            # Asegura series_code
-            self._ensure_series_code(pl)
-            pl.save(update_fields=['status', 'finalized_at', 'series_code'])
+        # ── NUEVO: auto-series si falta ───────────────────────────────────────────
+        def _ensure_series_code(pl_obj):
+            if pl_obj.series_code:
+                return
+            # código de restaurante; ajusta el atributo si tu modelo usa otro nombre
+            rest_code = (pl_obj.restaurant.code or 'SIN').upper() if pl_obj.restaurant else 'SIN'
+            year = pl_obj.created_at.year if pl_obj.created_at else timezone.now().year
+            prefix = f"{year}-{rest_code}-"
+            # Busca el máximo existente con ese prefijo y suma 1
+            last = (PurchaseList.objects
+                    .filter(series_code__startswith=prefix)
+                    .aggregate(m=Max('series_code'))['m'])
+            if last:
+                # último segmento numérico
+                try:
+                    last_n = int(last.rsplit('-', 1)[-1])
+                except Exception:
+                    last_n = 0
+            else:
+                last_n = 0
+            pl_obj.series_code = f"{prefix}{last_n + 1:04d}"
 
-        return Response({'ok': True, 'status': pl.status, 'series_code': pl.series_code}, status=status.HTTP_200_OK)
+        _ensure_series_code(pl)
+
+        pl.status = 'final'
+        pl.finalized_at = timezone.now()
+        pl.save(update_fields=['status', 'finalized_at', 'series_code'])
+
+        return Response({'ok': True, 'status': pl.status, 'series_code': pl.series_code},
+                        status=status.HTTP_200_OK)
 
     """
     Requiere autenticación.
@@ -577,25 +600,51 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
     # ---------- PDF por lista ----------
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
-        pl = self.get_object()  # scoped al user
-        params = request.query_params
-        hide_param = params.get("hide_prices", "").lower()
+        pl = self.get_object()  # ya está acotado al usuario
+
+        # --- flags/parámetros ---
+        hide_param = (request.query_params.get("hide_prices") or "").strip().lower()
         show_prices = hide_param not in ("1", "true", "yes")
-        # filtros opcionales por categoría
-        cats_ids = params.get("category_ids") or params.get("categories") or ""
-        cats_names = params.get("category_names") or ""
+
+        # filtros opcionales por categoría (acepta ids o nombres)
+        cats_ids = request.query_params.get("category_ids") or request.query_params.get("categories") or ""
+        cats_names = request.query_params.get("category_names") or ""
         cat_ids = [x.strip() for x in str(cats_ids).split(",") if x.strip()]
         cat_names = [x.strip() for x in str(cats_names).split(",") if x.strip()]
-        pdf_bytes = self._render_pdf_bytes(request, pl, show_prices=show_prices,
-                                           category_ids=cat_ids or None,
-                                           category_names=cat_names or None)
 
-        
+        # --- genera bytes del PDF ---
+        try:
+            pdf_bytes = self._render_pdf_bytes(
+                request,
+                pl,
+                show_prices=show_prices,
+                category_ids=cat_ids or None,
+                category_names=cat_names or None,
+            )
+        except Exception as e:
+            # si algo explota adentro, devolvemos JSON de error
+            return Response({"detail": f"No se pudo generar el PDF: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         if not pdf_bytes:
             return Response({"detail": "No se pudo generar el PDF en este entorno."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # --- nombre de archivo seguro ---
+        serie = pl.series_code or f"lista-{pl.pk}"
+        safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in f"{serie}.pdf")
+
+        # --- respuesta binaria directa (sin negociación de DRF) ---
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'attachment; filename="{pl.series_code or pl.id}.pdf"'
+        # Forzar descarga; si prefieres inline para ver en el visor del navegador, usa: inline
+        resp["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+        # Cabeceras útiles (evita sniff y caches raros en edges)
+        resp["X-Content-Type-Options"] = "nosniff"
+        resp["Cache-Control"] = "no-store"
+        try:
+            resp["Content-Length"] = str(len(pdf_bytes))
+        except Exception:
+            pass
+
         return resp
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
