@@ -355,3 +355,24 @@ class PurchaseListSerializer(serializers.ModelSerializer):
         )
         # Evitar que el cliente pueda asignar created_by manualmente
         read_only_fields = ("series_code", "status", "created_by", "created_at", "finalized_at")
+
+        
+    def validate(self, attrs):
+        """
+        Si el cliente viejo manda 'notes' pero no 'observation',
+        y 'observation' quedaría vacío, guardamos en 'observation'.
+        """
+        initial = getattr(self, "initial_data", {}) or {}
+        obs_in_payload = initial.get("observation", None)
+        notes_in_payload = initial.get("notes", None)
+
+        # ¿viene solo notes?
+        if (obs_in_payload in (None, "")) and (notes_in_payload not in (None, "")):
+            # Si además el request NO trae un campo 'notes' "real" diferente, redirige
+            # (si sí tienes un campo Notes real, puedes eliminar esta reasignación)
+            attrs["observation"] = notes_in_payload
+            # opcional: si no quieres que también se guarde en notes:
+            if "notes" in attrs and ("observation" in attrs):
+                # conserva notes si fue explícito; de lo contrario, podrías limpiarlo:
+                pass
+        return attrs
