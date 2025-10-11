@@ -355,7 +355,7 @@ class PurchaseListSerializer(serializers.ModelSerializer):
         )
         # Evitar que el cliente pueda asignar created_by manualmente
         read_only_fields = ("series_code", "status", "created_by", "created_at", "finalized_at")
-
+        
         
     def validate(self, attrs):
         """
