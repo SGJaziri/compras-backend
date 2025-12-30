@@ -333,6 +333,22 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         # EJ: 2025-ALP-0069  (a partir del id)
         pl.series_code = f"{timezone.now().date().year}-{prefix}-{pl.id:04d}"
 
+    @action(detail=True, methods=["delete"], url_path=r"items/(?P<item_id>\d+)")
+    def delete_item(self, request, pk=None, item_id=None):
+        pl = self.get_object()
+
+        # Ajusta este check a tu lógica real (status/locked/etc.)
+        if getattr(pl, "status", "") == "final":
+            return Response({"detail": "No se pueden editar listas finalizadas."}, status=400)
+
+        try:
+            it = pl.items.get(id=int(item_id))  # si tu related_name es distinto, lo ajustamos
+        except Exception:
+            return Response({"detail": "Ítem no encontrado."}, status=404)
+
+        it.delete()
+        return Response(status=204)    
+
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         pl = self.get_object()
