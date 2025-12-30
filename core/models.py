@@ -212,7 +212,7 @@ class PurchaseListItem(models.Model):
     unit = models.ForeignKey(Unit, on_delete=models.PROTECT)
 
     # Regla: si la unidad es moneda, qty es el **importe**; en otro caso, qty es la cantidad
-    qty = models.DecimalField(max_digits=12, decimal_places=2)
+    qty = models.DecimalField(max_digits=12, decimal_places=3)
     price_soles = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     class Meta:
