@@ -184,6 +184,27 @@ class PurchaseViewSet(viewsets.ModelViewSet):
     def pdf(self, request, pk=None):
         return Response({'detail': 'PDF no implementado aún'}, status=200)
 
+    def _is_kg_unit(self, unit) -> bool:
+        if not unit:
+            return False
+        name = (getattr(unit, "name", "") or "").strip().lower()
+        symbol = (getattr(unit, "symbol", "") or "").strip().lower()
+        # acepta "kg", "kilogramo", etc.
+        return symbol == "kg" or "kg" in name or "kilogram" in name
+
+    def _fmt_qty_human(self, qty: Decimal, is_kg: bool) -> str:
+        if qty is None:
+            return ""
+        if not is_kg:
+            # normal: 3 decimales como string
+            q = qty.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+            return str(q)
+
+        # KG: convertir 2.500 -> "2,5" (o si quieres "2 1/2", lo ajustamos luego)
+        q = qty.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        s = format(q, "f").rstrip("0").rstrip(".")
+        return s.replace(".", ",")
+
 
 # ====================== NUEVOS HELPERS PARA FILTROS ======================
 def _csv_to_list(s: str):
@@ -484,7 +505,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             raise ValidationError(msg if len(missing) <= 10 else msg + f" y {len(missing)-10} más")
 
     def _render_pdf_html(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
-        """Construye el HTML del PDF agrupando por categoría con decimales correctos."""
+        """Construye el HTML del PDF agrupando por categoría con display humano para KG."""
         items_qs = pl.items.select_related("product__category", "unit").all()
 
         # Filtrar por categorías si se enviaron
@@ -495,50 +516,51 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 ids = []
             if ids:
                 items_qs = items_qs.filter(product__category_id__in=ids)
+
         if category_names:
             names = [str(x).strip() for x in category_names if str(x).strip()]
             if names:
                 items_qs = items_qs.filter(product__category__name__in=names)
 
-        # --- Construcción del PDF (ahora SIEMPRE se ejecuta) ---
-        groups_map = {}   # {category_name: [line, ...]}
+        groups_map = {}  # {category_name: [line, ...]}
         grand_total = Decimal("0.00")
 
         for it in items_qs:
             cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
 
+            qty = Decimal(str(getattr(it, "qty", None) or "0"))
             price = (it.price_soles or Decimal("0"))
-            qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
-            raw_subtotal = qty if (getattr(it.unit, "is_currency", False) if it.unit else False) else (qty * price)
+
+            is_curr = bool(getattr(it.unit, "is_currency", False)) if it.unit else False
+            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) if it.unit else "-"
+            ulabel = ulabel or "-"
+
+            # display humano:
+            if it.unit and _is_kg_unit(it.unit):
+                qty_display = _fmt_kg_human(qty)   # 2.5 => "2 1/2"
+            else:
+                qty_display = _fmt_qty_human(qty)  # 5.000 => "5"
+
+            raw_subtotal = qty if is_curr else (qty * price)
             subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
             grand_total += subtotal
-
-            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
 
             line = {
                 "product": it.product.name,
                 "unit": ulabel,
-
-                # ✅ mantiene número para cálculos si lo necesitas
-                "qty": float(qty),
-
-                # ✅ NUEVO: el texto humano para mostrar en PDF
-                "qty_display": qty_display,
-
-                "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
-                        else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                "qty": float(qty),                  # numérico (cálculos)
+                "qty_display": qty_display,         # texto (mostrar)
+                "price": None if (is_curr or not show_prices) else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
-                "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
+                "unit_is_currency": is_curr,
             }
+
             groups_map.setdefault(cat, []).append(line)
 
-        # Normalizar a lista ordenada
+        # construir groups ordenados
         groups = []
-        flat_lines = []
         for cat_name in sorted(groups_map.keys(), key=lambda s: (s is None, s)):
             lines = groups_map[cat_name]
-            flat_lines.extend(lines)
             group_total_dec = sum(Decimal(str(l["subtotal"])) for l in lines)
             group_total = float(group_total_dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             groups.append({"category": cat_name, "lines": lines, "group_total": group_total})
@@ -547,13 +569,10 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             "pl": pl,
             "groups": groups,
             "grand_total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
-            "lines": flat_lines,
-            "total": format(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f"),
             "show_prices": show_prices,
             "observation": (pl.observation or ""),
         }
-        html = render_to_string("purchase_list.html", ctx)
-        return html
+        return render_to_string("purchase_list.html", ctx)
 
     def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
         html = self._render_pdf_html(
