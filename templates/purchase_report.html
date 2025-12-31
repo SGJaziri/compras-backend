@@ -45,7 +45,7 @@
               <td>{{ ln.date }}</td>
               <td>{{ ln.product }}</td>
               <td class="center">{{ ln.unit }}</td>
-              <td class="right">{{ ln.qty }}</td>
+              <td class="right">{{ ln.qty_display|default:ln.qty }}</td>
               {% if ln.unit_is_currency %}
                 <td class="right">-</td>
                 <td class="right">{{ ln.subtotal }}</td>
