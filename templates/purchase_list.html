@@ -54,7 +54,7 @@
           <tr>
             <td>{{ ln.product }}</td>
             <td>{{ ln.unit }}</td>
-            <td class="right">{{ ln.qty }}</td>
+            <td class="right">{{ ln.qty_display|default:ln.qty }}</td>
             {% if show_prices %}
               {% if ln.unit_is_currency %}
                 <td class="right">-</td>

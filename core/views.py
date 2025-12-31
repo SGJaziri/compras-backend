@@ -210,8 +210,63 @@ def _collect_multi(request, *keys: str):
             seen.add(s)
             dedup.append(s)
     return dedup
-# ========================================================================
+# ====================== HELPERS DISPLAY (KG HUMANO) ======================
+def _norm_unit_name(u: Unit) -> str:
+    s = ((getattr(u, "symbol", None) or "") + " " + (getattr(u, "name", None) or "")).strip()
+    s = s.lower()
+    # sin tildes
+    s = (s.replace("á","a").replace("é","e").replace("í","i").replace("ó","o").replace("ú","u"))
+    return " ".join(s.split())
 
+def _is_kg_unit(u: Unit) -> bool:
+    if not u:
+        return False
+    n = _norm_unit_name(u)
+    return (n == "kg") or (" kg " in f" {n} ") or ("kilogram" in n) or ("kilo" == n) or ("kilos" in n)
+
+def _fmt_qty_human(qty: Decimal) -> str:
+    """
+    Muestra sin ceros sobrantes, con hasta 3 decimales.
+    Ej: 5.000 -> '5', 0.125 -> '0.125'
+    """
+    if qty is None:
+        return "0"
+    q = qty.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    s = format(q, "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+def _fmt_kg_human(qty: Decimal) -> str:
+    """
+    Convierte 5.25 -> '5 1/4', 0.125 -> '1/8', 2.5 -> '2 1/2'
+    Mantiene fallback si no calza exacto.
+    """
+    if qty is None:
+        return "0"
+    q = qty.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+
+    whole = int(q // 1)
+    frac = (q - Decimal(whole)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+
+    frac_map = {
+        Decimal("0.500"): "1/2",
+        Decimal("0.250"): "1/4",
+        Decimal("0.125"): "1/8",
+        Decimal("0.000"): "",
+    }
+    frac_label = frac_map.get(frac)
+
+    # si no calza exacto a 0.125/0.25/0.5, fallback
+    if frac_label is None:
+        return _fmt_qty_human(q)
+
+    if whole == 0 and frac_label:
+        return frac_label
+    if whole != 0 and frac_label:
+        return f"{whole} {frac_label}"
+    return str(whole)
+# ========================================================================
 # core/views.py
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
@@ -453,8 +508,8 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             cat = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
 
             price = (it.price_soles or Decimal("0"))
-            qty   = (it.qty or Decimal("0"))
-            raw_subtotal = qty if (getattr(it.unit, "is_currency", False)) else (qty * price)
+            qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
+            raw_subtotal = qty if (getattr(it.unit, "is_currency", False) if it.unit else False) else (qty * price)
             subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             grand_total += subtotal
@@ -464,7 +519,13 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             line = {
                 "product": it.product.name,
                 "unit": ulabel,
+
+                # ✅ mantiene número para cálculos si lo necesitas
                 "qty": float(qty),
+
+                # ✅ NUEVO: el texto humano para mostrar en PDF
+                "qty_display": qty_display,
+
                 "price": None if (getattr(it.unit, "is_currency", False) or not show_prices)
                         else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                 "subtotal": float(subtotal),
@@ -818,7 +879,20 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             cat  = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
 
             price = (it.price_soles or Decimal("0"))
-            qty   = (it.qty or Decimal("0"))
+            qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
+
+            c["lines"].append({
+                "date": it.purchase_list.created_at.date().isoformat(),
+                "product": it.product.name,
+                "unit": ulabel,
+
+                "qty": float(qty),           # numérico
+                "qty_display": qty_display,  # texto humano ✅
+
+                "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                "subtotal": float(subtotal),
+                "unit_is_currency": is_curr,
+            })
             is_curr = bool(getattr(it.unit, "is_currency", False))
             ulabel  = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
 
