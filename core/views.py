@@ -903,11 +903,13 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             c = r["categories"].setdefault(cat, {"lines": [] if mode == "detail" else None, "total": Decimal("0.00")})
 
             if mode == "detail":
+                qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
                 c["lines"].append({
                     "date": it.purchase_list.created_at.date().isoformat(),
                     "product": it.product.name,
                     "unit": ulabel,
-                    "qty": float(qty),
+                    "qty": float(qty),           # numérico
+                    "qty_display": qty_display,  # texto humano ✅
                     "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                     "subtotal": float(subtotal),
                     "unit_is_currency": is_curr,
