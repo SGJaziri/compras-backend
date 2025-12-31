@@ -27,11 +27,15 @@ DATABASES = {
 }
 
 # --- Hosts / CORS / CSRF ---
-ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "")  # ej: "localhost,127.0.0.1,tuapp.up.railway.app"
-CORS_ALLOWED_ORIGINS = _csv_env("CORS_ALLOWED_ORIGINS", "")  # http(s)://dominio.tld
-CORS_ALLOWED_ORIGIN_REGEXES = _csv_env("CORS_ALLOWED_ORIGIN_REGEXES", "")  # regex para previews
-CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS", "")  # http(s)://dominio.tld
 CORS_ALLOW_CREDENTIALS = True
+ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "")  # ej: "localhost,127.0.0.1,tuapp.up.railway.app"
+CORS_ALLOWED_ORIGINS = [
+    "https://compras-frontend-production.up.railway.app",
+]
+CORS_ALLOWED_ORIGIN_REGEXES = _csv_env("CORS_ALLOWED_ORIGIN_REGEXES", "")  # regex para previews
+CSRF_TRUSTED_ORIGINS = [
+    "https://compras-frontend-production.up.railway.app",
+]
 
 # En desarrollo, si no configuraste dominios, permite todo (solo DEBUG)
 if DEBUG and not (CORS_ALLOWED_ORIGINS or CORS_ALLOWED_ORIGIN_REGEXES):
@@ -39,6 +43,9 @@ if DEBUG and not (CORS_ALLOWED_ORIGINS or CORS_ALLOWED_ORIGIN_REGEXES):
 
 # --- Apps ---
 INSTALLED_APPS = [
+    "corsheaders",
+    "rest_framework",
+    "rest_framework.authtoken",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -46,21 +53,15 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
 
-    "corsheaders",
-    "rest_framework",
-    "rest_framework.authtoken",
     "django_filters",
-
     "core",
 ]
 
 # --- Middleware ---
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
-
-    # CORS lo más alto posible y antes de CommonMiddleware/CSRF
+        # CORS lo más alto posible y antes de CommonMiddleware/CSRF
     "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.security.SecurityMiddleware",
 
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -68,6 +69,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
 ]
 
 ROOT_URLCONF = "purchases.urls"
