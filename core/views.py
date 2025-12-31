@@ -832,152 +832,106 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         rows.sort(key=lambda r: r["restaurant_name"] or "")
         return Response(rows, status=200)
 
-    # ---------- Reporte consolidado por rango (con filtros opcionales) ----------
     def _build_range_payload(self, sdate, edate, only_final=True, mode="detail", *, filters=None):
-        """
-        mode:
-          - 'detail': incluye lines (producto, unidad, qty, precio, subtotal)
-          - 'summary': omite lines y deja solo totales por categoría/restaurante
+        qs = PurchaseListItem.objects.select_related(
+            "purchase_list",
+            "purchase_list__restaurant",
+            "product",
+            "product__category",
+            "unit",
+        )
 
-        filters (opcional):
-          {
-            "category_ids": [str...],
-            "category_names": [str...],
-            "product_ids": [str...],
-            "product_names": [str...],
-          }
-        """
-        qs_lists = (PurchaseList.objects
-                    .select_related("restaurant")
-                    .filter(created_by=self.request.user,
-                            created_at__date__gte=sdate, created_at__date__lte=edate))
+        qs = qs.filter(
+            purchase_list__created_at__date__gte=sdate,
+            purchase_list__created_at__date__lte=edate,
+        )
+
         if only_final:
-            qs_lists = qs_lists.filter(status="final")
+            qs = qs.filter(purchase_list__status="final")
 
-        items = (PurchaseListItem.objects
-                 .select_related("purchase_list__restaurant", "product__category", "unit")
-                 .filter(purchase_list__in=qs_lists))
+        if filters:
+            if filters.get("restaurant_ids"):
+                qs = qs.filter(purchase_list__restaurant_id__in=filters["restaurant_ids"])
+            if filters.get("category_ids"):
+                qs = qs.filter(product__category_id__in=filters["category_ids"])
+            if filters.get("product_ids"):
+                qs = qs.filter(product_id__in=filters["product_ids"])
 
-        # ---- aplicar filtros si llegan ----
-        filters = filters or {}
-        cat_ids   = filters.get("category_ids") or []
-        cat_names = filters.get("category_names") or []
-        prod_ids  = filters.get("product_ids") or []
-        prod_names= filters.get("product_names") or []
-
-        def _to_int_list(xs):
-            out = []
-            for x in xs:
-                try:
-                    out.append(int(x))
-                except Exception:
-                    pass
-            return out
-
-        if cat_ids:
-            ids = _to_int_list(cat_ids)
-            if ids:
-                items = items.filter(product__category_id__in=ids)
-        elif cat_names:
-            items = items.filter(product__category__name__in=cat_names)
-
-        if prod_ids:
-            ids = _to_int_list(prod_ids)
-            if ids:
-                items = items.filter(product_id__in=ids)
-        elif prod_names:
-            items = items.filter(product__name__in=prod_names)
-
-        # ---- resto igual que antes ----
         rest_map = {}
         date_map = defaultdict(lambda: {"lists": set(), "total": Decimal("0.00")})
         grand_total = Decimal("0.00")
 
-        for it in items:
-            rest = getattr(it.purchase_list.restaurant, "name", "Sin restaurante")
-            cat  = getattr(getattr(it.product, "category", None), "name", "Sin categoría")
+        for it in qs:
+            rest = it.purchase_list.restaurant.name if it.purchase_list.restaurant else "Sin restaurante"
+            cat = it.product.category.name if it.product.category else "Sin categoría"
 
-            price = (it.price_soles or Decimal("0"))
-            qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
+            qty = Decimal(str(it.qty or 0))
+            price = it.price_soles or Decimal("0")
 
-            c["lines"].append({
-                "date": it.purchase_list.created_at.date().isoformat(),
-                "product": it.product.name,
-                "unit": ulabel,
+            is_curr = bool(getattr(it.unit, "is_currency", False)) if it.unit else False
+            ulabel = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) if it.unit else "-"
+            ulabel = ulabel or "-"
 
-                "qty": float(qty),           # numérico
-                "qty_display": qty_display,  # texto humano ✅
-
-                "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                "subtotal": float(subtotal),
-                "unit_is_currency": is_curr,
-            })
-            is_curr = bool(getattr(it.unit, "is_currency", False))
-            ulabel  = (getattr(it.unit, "symbol", None) or getattr(it.unit, "name", "")) or "-"
-
-            raw_subtotal = qty if is_curr else (qty * price)
+            raw_subtotal = qty if is_curr else qty * price
             subtotal = raw_subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             r = rest_map.setdefault(rest, {"categories": {}, "total": Decimal("0.00")})
-            c = r["categories"].setdefault(cat, {"lines": [] if mode == "detail" else None, "total": Decimal("0.00")})
+            c = r["categories"].setdefault(cat, {"lines": [], "total": Decimal("0.00")})
 
             if mode == "detail":
-                qty_display = _fmt_kg_human(qty) if (it.unit and _is_kg_unit(it.unit)) else _fmt_qty_human(qty)
+                if it.unit and _is_kg_unit(it.unit):
+                    qty_display = _fmt_kg_human(qty)
+                else:
+                    qty_display = _fmt_qty_human(qty)
+
                 c["lines"].append({
                     "date": it.purchase_list.created_at.date().isoformat(),
                     "product": it.product.name,
                     "unit": ulabel,
-                    "qty": float(qty),           # numérico
-                    "qty_display": qty_display,  # texto humano ✅
-                    "price": None if is_curr else float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                    "qty": float(qty),
+                    "qty_display": qty_display,
+                    "price": None if is_curr else float(price),
                     "subtotal": float(subtotal),
                     "unit_is_currency": is_curr,
                 })
 
-            c["total"] = (c["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            r["total"] = (r["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            grand_total = (grand_total + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            c["total"] += subtotal
+            r["total"] += subtotal
+            grand_total += subtotal
 
             d = it.purchase_list.created_at.date().isoformat()
             date_map[d]["lists"].add(it.purchase_list_id)
-            date_map[d]["total"] = (date_map[d]["total"] + subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            date_map[d]["total"] += subtotal
 
-        restaurants = []
-        for rname in sorted(rest_map.keys()):
-            cat_list = []
-            for cname in sorted(rest_map[rname]["categories"].keys()):
-                cdata = rest_map[rname]["categories"][cname]
-                entry = {
-                    "category": cname,
-                    "total": float(Decimal(cdata["total"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                }
-                if mode == "detail":
-                    entry["lines"] = cdata["lines"]
-                cat_list.append(entry)
-
-            restaurants.append({
-                "restaurant": rname,
-                "total": float(Decimal(rest_map[rname]["total"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-                "categories": cat_list,
-            })
-
-        date_breakdown = []
-        for d in sorted(date_map.keys()):
-            date_breakdown.append({
-                "date": d,
-                "lists": len(date_map[d]["lists"]),
-                "total": float(Decimal(date_map[d]["total"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-            })
-
-        return {
-            "mode": mode,
-            "start": sdate.isoformat(),
-            "end": edate.isoformat(),
-            "only_final": only_final,
-            "grand_total": float(grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-            "restaurants": restaurants,
-            "dates": date_breakdown,
+        payload = {
+            "restaurants": [],
+            "dates": [],
+            "grand_total": float(grand_total),
         }
+
+        for rest_name, rdata in rest_map.items():
+            cats = []
+            for cname, cdata in rdata["categories"].items():
+                cats.append({
+                    "category": cname,
+                    "lines": cdata["lines"] if mode == "detail" else None,
+                    "total": float(cdata["total"]),
+                })
+            payload["restaurants"].append({
+                "restaurant": rest_name,
+                "categories": cats,
+                "total": float(rdata["total"]),
+            })
+
+        for d, v in sorted(date_map.items()):
+            payload["dates"].append({
+                "date": d,
+                "lists": len(v["lists"]),
+                "total": float(v["total"]),
+            })
+
+        return payload
+
 
     @action(detail=False, methods=['get'], url_path='export/range')
     def export_range(self, request):
