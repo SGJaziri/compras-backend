@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from django.utils import timezone
 from django.template.loader import render_to_string
 from django.http import HttpResponse
@@ -1012,44 +1015,27 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         # Render plantilla
         html = render_to_string("purchase_report.html", payload)
 
-        import logging
-        logger = logging.getLogger(__name__)
+        from io import BytesIO
 
         pdf_bytes = None
 
         # 1) XHTML2PDF primero (más estable en Railway)
         try:
             from xhtml2pdf import pisa
-            from io import BytesIO
-
             buf = BytesIO()
-            result = pisa.CreatePDF(
-                src=BytesIO(html.encode("utf-8")),
-                dest=buf,
-                encoding="utf-8"
-            )
-            if not result.err:
-                pdf_bytes = buf.getvalue()
+            result = pisa.CreatePDF(html, dest=buf, encoding="utf-8")
+            if result.err:
+                logger.error("xhtml2pdf result.err=%s (export_range_pdf)", result.err)
             else:
-                logger.error("xhtml2pdf err=%s al generar PDF (export_range_pdf)", result.err)
-
+                pdf_bytes = buf.getvalue()
         except Exception as e:
             logger.exception("Fallo xhtml2pdf (export_range_pdf): %s", e)
 
-        # 2) WeasyPrint como fallback (si Railway lo soporta)
+        # 2) WeasyPrint como fallback
         if not pdf_bytes:
             try:
                 from weasyprint import HTML
-                pdf_bytes = HTML(
-                    string=html,
-                    base_url=request.build_absolute_uri("/")
-                ).write_pdf()
+                pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri("/")).write_pdf()
             except Exception as e:
                 logger.exception("Fallo WeasyPrint (export_range_pdf): %s", e)
                 pdf_bytes = None
-
-        # Forzar descarga directa (attachment)
-        resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp['Content-Disposition'] = f'attachment; filename="reporte-{payload["start"]}_{payload["end"]}.pdf"'
-        return resp
-    
