@@ -884,6 +884,12 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                 else:
                     qty_display = _fmt_qty_human(qty)
 
+                qty_display = (
+                    _fmt_qty_human(qty)
+                    if (it.unit and _is_kg_unit(it.unit))
+                    else str(qty)
+                )
+
                 c["lines"].append({
                     "date": it.purchase_list.created_at.date().isoformat(),
                     "product": it.product.name,
@@ -892,7 +898,7 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                     "qty_display": qty_display,
                     "price": None if is_curr else float(price),
                     "subtotal": float(subtotal),
-                    "unit_is_currency": is_curr,
+                    "unit_is_currency": bool(getattr(it.unit, "is_currency", False)),
                 })
 
             c["total"] += subtotal
@@ -1006,23 +1012,41 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         # Render plantilla
         html = render_to_string("purchase_report.html", payload)
 
-        pdf_bytes = None
-        try:
-            from weasyprint import HTML
-            pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri("/")).write_pdf()
-        except Exception:
-            try:
-                from xhtml2pdf import pisa
-                from io import BytesIO
-                buf = BytesIO()
-                result = pisa.CreatePDF(html, dest=buf, encoding='utf-8')
-                if not result.err:
-                    pdf_bytes = buf.getvalue()
-            except Exception:
-                pdf_bytes = None
+        import logging
+        logger = logging.getLogger(__name__)
 
+        pdf_bytes = None
+
+        # 1) XHTML2PDF primero (más estable en Railway)
+        try:
+            from xhtml2pdf import pisa
+            from io import BytesIO
+
+            buf = BytesIO()
+            result = pisa.CreatePDF(
+                src=BytesIO(html.encode("utf-8")),
+                dest=buf,
+                encoding="utf-8"
+            )
+            if not result.err:
+                pdf_bytes = buf.getvalue()
+            else:
+                logger.error("xhtml2pdf err=%s al generar PDF (export_range_pdf)", result.err)
+
+        except Exception as e:
+            logger.exception("Fallo xhtml2pdf (export_range_pdf): %s", e)
+
+        # 2) WeasyPrint como fallback (si Railway lo soporta)
         if not pdf_bytes:
-            return Response({"detail": "No se pudo generar el PDF del reporte."}, status=500)
+            try:
+                from weasyprint import HTML
+                pdf_bytes = HTML(
+                    string=html,
+                    base_url=request.build_absolute_uri("/")
+                ).write_pdf()
+            except Exception as e:
+                logger.exception("Fallo WeasyPrint (export_range_pdf): %s", e)
+                pdf_bytes = None
 
         # Forzar descarga directa (attachment)
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
