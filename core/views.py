@@ -577,7 +577,14 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         }
         return render_to_string("purchase_list.html", ctx)
 
-    def _render_pdf_bytes(self, request, pl: PurchaseList, show_prices: bool = True, category_ids=None, category_names=None):
+    def _render_pdf_bytes(
+        self,
+        request,
+        pl: PurchaseList,
+        show_prices: bool = True,
+        category_ids=None,
+        category_names=None,
+    ):
         html = self._render_pdf_html(
             request,
             pl,
@@ -585,23 +592,24 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             category_ids=category_ids,
             category_names=category_names,
         )
-        # 1) WeasyPrint
-        try:
-            from weasyprint import HTML  # import perezoso
-            return HTML(string=html, base_url=request.build_absolute_uri("/")).write_pdf()
-        except Exception as e:
-        # Agrega logging opcional para detectar fallas reales
-            print(f"[PDF Error] WeasyPrint failed: {e}")
-            try:
-                from xhtml2pdf import pisa
-                from io import BytesIO
-                buf = BytesIO()
-                result = pisa.CreatePDF(html, dest=buf, encoding='utf-8')
-                if not result.err:
-                    return buf.getvalue()
-            except Exception as e2:
-                print(f"[PDF Error] xhtml2pdf failed: {e2}")
-        return b"%PDF-1.4\n%"  # <--- dummy PDF mínimo, evita Response() JSON
+
+        from xhtml2pdf import pisa
+        from io import BytesIO
+
+        buf = BytesIO()
+        result = pisa.CreatePDF(
+            src=html,
+            dest=buf,
+            encoding="utf-8"
+        )
+
+        if result.err:
+            # logging opcional
+            print("[PDF Error] xhtml2pdf failed in _render_pdf_bytes", flush=True)
+            return None  # 👈 importante: no devolver PDF dummy
+
+        return buf.getvalue()
+
 
     def _next_series_code(self, restaurant):
         # Usa code si existe; si no, deriva 3 letras del nombre; si no, GEN
@@ -737,56 +745,77 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         )
 
     # ---------- PDF por lista ----------
-    @action(detail=True, methods=['get'], url_path='pdf',renderer_classes=[PDFRenderer],content_negotiation_class=PassthroughNegotiation,)
+    @action(
+    detail=True,
+    methods=["get"],
+    url_path="pdf",
+    renderer_classes=[PDFRenderer],
+    content_negotiation_class=PassthroughNegotiation,
+)
     def pdf(self, request, pk=None):
         pl = self.get_object()
 
-        if pl.status == 'final' and not pl.series_code:
-            rest_code = (pl.restaurant.code or 'SIN').upper() if pl.restaurant else 'SIN'
+        # --- asegurar series_code si está final ---
+        if pl.status == "final" and not pl.series_code:
+            rest_code = (pl.restaurant.code or "SIN").upper() if pl.restaurant else "SIN"
             year = pl.created_at.year if pl.created_at else timezone.now().year
             prefix = f"{year}-{rest_code}-"
-            last = (PurchaseList.objects
-                    .filter(series_code__startswith=prefix)
-                    .aggregate(m=Max('series_code'))['m'])
+            last = (
+                PurchaseList.objects.filter(series_code__startswith=prefix)
+                .aggregate(m=Max("series_code"))["m"]
+            )
             if last:
                 try:
-                    last_n = int(last.rsplit('-', 1)[-1])
+                    last_n = int(last.rsplit("-", 1)[-1])
                 except Exception:
                     last_n = 0
             else:
                 last_n = 0
-            pl.series_code = f"{prefix}{last_n + 1:04d}"
-            pl.save(update_fields=['series_code', 'updated_at'])
 
+            pl.series_code = f"{prefix}{last_n + 1:04d}"
+            pl.save(update_fields=["series_code", "updated_at"])
+
+        # --- show/hide prices ---
         hide_param = (request.query_params.get("hide_prices") or "").strip().lower()
         show_prices = hide_param not in ("1", "true", "yes")
 
+        # --- filtros de categoría ---
         cat_ids = request.query_params.get("category_ids") or request.query_params.get("categories") or ""
         cat_names = request.query_params.get("category_names") or ""
         cat_ids = [x.strip() for x in str(cat_ids).split(",") if x.strip()]
         cat_names = [x.strip() for x in str(cat_names).split(",") if x.strip()]
 
+        # --- render PDF bytes ---
         try:
             pdf_bytes = self._render_pdf_bytes(
-                request, pl, show_prices=show_prices,
-                category_ids=cat_ids or None, category_names=cat_names or None
+                request,
+                pl,
+                show_prices=show_prices,
+                category_ids=cat_ids or None,
+                category_names=cat_names or None,
             )
-        except Exception:
+        except Exception as e:
+            logger.exception("Error en _render_pdf_bytes (PurchaseList.pdf) pl_id=%s: %s", pl.pk, e)
             pdf_bytes = None
 
+        # ✅ Mantén dummy SOLO para este endpoint si lo necesitas por el 406/renderer.
+        #    Pero deja un mensaje claro en logs si ocurre.
         if not pdf_bytes:
-            # dummy pdf mínimo — evita que DRF/edge creen JSON y activen 406
+            logger.error("PDF vacío o fallido, devolviendo dummy PDF (PurchaseList.pdf) pl_id=%s", pl.pk)
             pdf_bytes = b"%PDF-1.4\n%"
 
+        # --- nombre seguro ---
         serie = pl.series_code or f"lista-{pl.pk}"
         safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in f"{serie}.pdf")
 
+        # --- respuesta (descarga directa) ---
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp["Content-Disposition"] = f'attachment; filename=\"{safe_name}\"'
+        resp["Content-Disposition"] = f'attachment; filename="{safe_name}"'
         resp["X-Content-Type-Options"] = "nosniff"
         resp["Cache-Control"] = "no-store"
         resp["Content-Length"] = str(len(pdf_bytes))
         return resp
+
 
     # ---------- Índice por fecha (1 PDF por restaurante) ----------
     @action(detail=False, methods=['get'], url_path='export/by-date')
@@ -993,12 +1022,16 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
             mode = "detail"
 
         if not start or not end:
-            return Response({"detail": "Parámetros 'start' y 'end' son requeridos (YYYY-MM-DD)."}, status=400)
+            return Response(
+                {"detail": "Parámetros 'start' y 'end' son requeridos (YYYY-MM-DD)."},
+                status=400
+            )
         try:
             sdate = date_cls.fromisoformat(start)
             edate = date_cls.fromisoformat(end)
         except ValueError:
             return Response({"detail": "Fechas inválidas. Use YYYY-MM-DD."}, status=400)
+
         if sdate > edate:
             sdate, edate = edate, sdate
 
@@ -1015,27 +1048,28 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
         # Render plantilla
         html = render_to_string("purchase_report.html", payload)
 
+        # Generar PDF con xhtml2pdf (Railway-friendly)
         from io import BytesIO
+        from xhtml2pdf import pisa
 
-        pdf_bytes = None
+        buf = BytesIO()
+        result = pisa.CreatePDF(
+            src=html,
+            dest=buf,
+            encoding="utf-8"
+        )
 
-        # 1) XHTML2PDF primero (más estable en Railway)
-        try:
-            from xhtml2pdf import pisa
-            buf = BytesIO()
-            result = pisa.CreatePDF(html, dest=buf, encoding="utf-8")
-            if result.err:
-                logger.error("xhtml2pdf result.err=%s (export_range_pdf)", result.err)
-            else:
-                pdf_bytes = buf.getvalue()
-        except Exception as e:
-            logger.exception("Fallo xhtml2pdf (export_range_pdf): %s", e)
+        if result.err:
+            # Si quieres log: logger.error(...)
+            return Response({"detail": "Error al generar el PDF del reporte."}, status=500)
 
-        # 2) WeasyPrint como fallback
-        if not pdf_bytes:
-            try:
-                from weasyprint import HTML
-                pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri("/")).write_pdf()
-            except Exception as e:
-                logger.exception("Fallo WeasyPrint (export_range_pdf): %s", e)
-                pdf_bytes = None
+        pdf_bytes = buf.getvalue()
+
+        # ✅ Respuesta PDF (descarga directa)
+        filename = f"reporte_compras_{sdate.isoformat()}_{edate.isoformat()}_{mode}.pdf"
+        resp = HttpResponse(pdf_bytes, content_type="application/pdf")
+        resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+        resp["X-Content-Type-Options"] = "nosniff"
+        resp["Cache-Control"] = "no-store"
+        resp["Content-Length"] = str(len(pdf_bytes))
+        return resp
