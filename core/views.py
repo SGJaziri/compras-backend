@@ -21,6 +21,8 @@ from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from django.core.exceptions import ValidationError
 
+from rest_framework.exceptions import PermissionDenied
+
 from .models import (
     Category, Product, Restaurant, Purchase,
     PurchaseList, PurchaseListItem, Unit
@@ -139,9 +141,12 @@ class ProductViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
         model = Product
 
 
-class UnitViewSet(viewsets.ModelViewSet):
+class UnitViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     queryset = Unit.objects.all().order_by("name")
     serializer_class = UnitSerializer
+    permission_classes = [IsAuthenticated]
+    class Meta:
+        model = Unit
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -210,6 +215,39 @@ class PurchaseViewSet(viewsets.ModelViewSet):
 
 
 # ====================== NUEVOS HELPERS PARA FILTROS ======================
+
+def _ensure_list_editable(pl):
+    if pl.status == "final":
+        raise PermissionDenied("La lista está cerrada y no puede modificarse.")
+
+def _is_valid_price(p):
+    try:
+        p = Decimal(str(p))
+    except Exception:
+        return False
+    return p > 0
+
+def _autolock_if_all_priced(pl):
+    # Si NO hay items, no bloquea
+    items = pl.items.all()
+    if not items.exists():
+        return False
+
+    all_priced = True
+    for it in items:
+        if not _is_valid_price(it.price_soles   ):
+            all_priced = False
+            break
+
+    if all_priced and pl.status != "final":
+        pl.status = "final"
+        pl.locked_at = timezone.now()  # si ya existe en tu modelo; si no, lo omitimos
+        # Si locked_at no existe, comenta esa línea o ajustamos luego.
+        pl.save(update_fields=[f for f in ["status", "locked_at"] if hasattr(pl, f)])
+        return True
+
+    return False
+
 def _csv_to_list(s: str):
     return [x.strip() for x in s.split(",") if x and str(x).strip()]
 
@@ -300,62 +338,99 @@ from .serializers import PurchaseListItemSerializer, PurchaseListItemPatchSerial
 
 class PurchaseListItemViewSet(viewsets.ModelViewSet):
     queryset = PurchaseListItem.objects.select_related(
-        'product__category', 'unit', 'purchase_list'
+        "product__category", "unit", "purchase_list"
     )
     permission_classes = [IsAuthenticated]
-    http_method_names = ['get', 'patch', 'head', 'options']
+    http_method_names = ["get", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         qs = super().get_queryset()
-        pl = self.request.query_params.get('purchase_list')
+
+        # ✅ aislamiento por usuario (ajusta el campo si tu modelo usa otro nombre)
+        qs = qs.filter(purchase_list__created_by=self.request.user)
+
+        pl = self.request.query_params.get("purchase_list")
         if pl:
             qs = qs.filter(purchase_list_id=pl)
         return qs
 
     def get_serializer_class(self):
-        if getattr(self, 'action', None) in ('update', 'partial_update'):
+        if getattr(self, "action", None) in ("update", "partial_update"):
             return PurchaseListItemPatchSerializer
         return PurchaseListItemSerializer
 
+    def _ensure_editable(self, pl):
+        if pl.status == "final":
+            raise PermissionDenied("La lista está cerrada y no puede modificarse.")
+
     def partial_update(self, request, *args, **kwargs):
-        kwargs['partial'] = True
+        kwargs["partial"] = True
         instance = self.get_object()
+        pl = instance.purchase_list
+
+        # ✅ bloqueo si ya está final
+        self._ensure_editable(pl)
 
         # 1) actualizar el ítem con el serializer de PATCH
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
-        # 2) si la lista no es final, verificar si ya no quedan ítems sin precio
-        pl = instance.purchase_list
-        if pl.status != 'final':
-            # ¿existe algún ítem NO monetario sin precio?
-            falta = pl.items.filter(unit__is_currency=False, price_soles__isnull=True).exists()
+        # 2) auto-cierre si ya todos tienen precio válido (>0) en ítems NO monetarios
+        if pl.status != "final":
+            falta = pl.items.filter(
+                unit__is_currency=False
+            ).filter(
+                # falta precio si es null o <= 0
+                price_soles__isnull=True
+            ).exists()
+
+            if not falta:
+                # también validar <= 0 (por si guardan 0)
+                for it in pl.items.filter(unit__is_currency=False):
+                    try:
+                        if it.price_soles is None or Decimal(str(it.price_soles)) <= 0:
+                            falta = True
+                            break
+                    except Exception:
+                        falta = True
+                        break
+
             if not falta:
                 # asignar serie si falta
                 if not pl.series_code:
-                    rest_code = (pl.restaurant.code or 'SIN').upper() if pl.restaurant else 'SIN'
+                    rest_code = (pl.restaurant.code or "SIN").upper() if pl.restaurant else "SIN"
                     year = pl.created_at.year if pl.created_at else timezone.now().year
                     prefix = f"{year}-{rest_code}-"
-                    last = (PurchaseList.objects
-                            .filter(series_code__startswith=prefix)
-                            .aggregate(m=Max('series_code'))['m'])
+                    last = (
+                        PurchaseList.objects.filter(series_code__startswith=prefix)
+                        .aggregate(m=Max("series_code"))["m"]
+                    )
                     if last:
                         try:
-                            last_n = int(last.rsplit('-', 1)[-1])
+                            last_n = int(last.rsplit("-", 1)[-1])
                         except Exception:
                             last_n = 0
                     else:
                         last_n = 0
                     pl.series_code = f"{prefix}{last_n + 1:04d}"
 
-                pl.status = 'final'
+                pl.status = "final"
                 pl.finalized_at = timezone.now()
-                pl.save(update_fields=['series_code', 'status', 'finalized_at'])
+                pl.save(update_fields=["series_code", "status", "finalized_at"])
 
         # 3) responder con el serializer completo
         full = PurchaseListItemSerializer(instance, context=self.get_serializer_context())
         return Response(full.data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        pl = instance.purchase_list
+
+        # ✅ bloqueo si ya está final
+        self._ensure_editable(pl)
+
+        return super().destroy(request, *args, **kwargs)
 
 class PDFRenderer(renderers.BaseRenderer):
     media_type = "application/pdf"
@@ -915,12 +990,6 @@ class PurchaseListViewSet(viewsets.ModelViewSet):
                     qty_display = _fmt_kg_human(qty)
                 else:
                     qty_display = _fmt_qty_human(qty)
-
-                qty_display = (
-                    _fmt_qty_human(qty)
-                    if (it.unit and _is_kg_unit(it.unit))
-                    else str(qty)
-                )
 
                 c["lines"].append({
                     "date": it.purchase_list.created_at.date().isoformat(),
