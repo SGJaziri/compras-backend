@@ -336,12 +336,14 @@ from rest_framework.response import Response
 from .models import PurchaseListItem
 from .serializers import PurchaseListItemSerializer, PurchaseListItemPatchSerializer
 
+from rest_framework.exceptions import PermissionDenied
+
 class PurchaseListItemViewSet(viewsets.ModelViewSet):
     queryset = PurchaseListItem.objects.select_related(
         "product__category", "unit", "purchase_list"
     )
     permission_classes = [IsAuthenticated]
-    http_method_names = ["get", "patch", "delete", "head", "options"]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -354,13 +356,36 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
             qs = qs.filter(purchase_list_id=pl)
         return qs
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pl = serializer.validated_data["purchase_list"]
+        if pl.created_by_id != request.user.id:
+            raise PermissionDenied("No tienes permiso para modificar esta lista.")
+        self._ensure_open(pl)
+
+        self.perform_create(serializer)
+
+        full = PurchaseListItemSerializer(
+            serializer.instance,
+            context=self.get_serializer_context()
+        )
+        return Response(full.data, status=201)
+
     def get_serializer_class(self):
-        if getattr(self, "action", None) in ("update", "partial_update"):
+        if self.action == 'create':
+            return PurchaseListItemCreateSerializer
+        if self.action in ('update', 'partial_update'):
             return PurchaseListItemPatchSerializer
         return PurchaseListItemSerializer
 
     def _ensure_editable(self, pl):
         if pl.status == "final":
+            raise PermissionDenied("La lista está cerrada y no puede modificarse.")
+
+    def _ensure_open(self, pl):
+        if pl.status == 'final':
             raise PermissionDenied("La lista está cerrada y no puede modificarse.")
 
     def partial_update(self, request, *args, **kwargs):
@@ -378,12 +403,18 @@ class PurchaseListItemViewSet(viewsets.ModelViewSet):
 
         # 2) auto-cierre si ya todos tienen precio válido (>0) en ítems NO monetarios
         if pl.status != "final":
-            falta = pl.items.filter(
-                unit__is_currency=False
-            ).filter(
-                # falta precio si es null o <= 0
-                price_soles__isnull=True
-            ).exists()
+            items = pl.items.filter(unit__is_currency=False)
+
+            falta = False
+            for it in items:
+                try:
+                    v = Decimal(str(it.price_soles)) if it.price_soles is not None else None
+                    if v is None or v <= 0:
+                        falta = True
+                        break
+                except Exception:
+                    falta = True
+                    break
 
             if not falta:
                 # también validar <= 0 (por si guardan 0)

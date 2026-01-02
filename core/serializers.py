@@ -134,6 +134,11 @@ class PurchaseSerializer(serializers.ModelSerializer):
             'quantity': {'required': False},
         }
 
+class PurchaseListItemCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseListItem
+        fields = ("id", "purchase_list", "product", "unit", "qty")
+
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
     PATCH del Historial:
