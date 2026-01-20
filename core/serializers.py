@@ -138,6 +138,7 @@ class PurchaseListItemCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseListItem
         fields = ("id", "purchase_list", "product", "unit", "qty")
+        
 
 class PurchaseListItemPatchSerializer(serializers.ModelSerializer):
     """
